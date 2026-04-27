@@ -1,0 +1,95 @@
+# Factory AI Tracking System Configuration
+# Module 1 & 2 Implementation
+
+system:
+  name: "Factory AI Tracking System"
+  version: "1.0.0"
+  factory: "Gumcorp Factory"
+  total_area_sqm: 1824
+  debug: true
+  fps_target: 15
+
+# Camera Configuration
+cameras:
+  - id: "sheetline"
+    # video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30302/unicast/c1/s1/live"
+    video_path: "data/videos/Sample 1.mp4"
+    enabled: true
+    position: [100, 100]
+    calibration_points:
+      camera_points: []
+      map_points: []
+  
+  - id: "palletline"
+    # video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30292/unicast/c1/s1/live"
+    video_path: "data/videos/Sample 2.mp4"
+    enabled: true
+    position: [500, 100]
+    calibration_points:
+      camera_points: []
+      map_points: []
+
+# Detection Settings (YOLOv8)
+detection:
+  model_path: "models/yolov8n.pt"
+  confidence_threshold: 0.5
+  iou_threshold: 0.45
+  classes: [0]
+
+# ArUco Settings
+aruco:
+  dictionary_type: "DICT_4X4_50"
+  marker_size_mm: 50.0
+  detection_confidence: 0.8
+
+# Mapping Settings (Homography)
+mapping:
+  floor_plan_path: "docs/GC Cameras CCTV Updated April 2026 Rev 01 (2).pdf"
+  floor_plan_analysis: "./floor_plan_analysis.json"
+  coordinate_origin: [0, 0]
+  scale_factor: 50.0  # pixels per meter (50px = 1m)
+  ransac_reproj_threshold: 3.0
+
+# Tracking Settings
+tracking:
+  max_history_length: 100
+  distance_threshold: 50.0
+  missing_frame_threshold: 10
+  fusion_method: "average"
+
+# Behavior Analysis Settings
+behavior:
+  idle_time_threshold: 30
+  walking_speed_threshold: 10.0
+  carrying_proximity_threshold: 100.0
+  machine_interaction_threshold: 20.0
+
+# Zone Definitions
+zones:
+  loading_bay:
+    name: "Loading Bay"
+    color: [139, 69, 19]
+    polygon: [[100, 400], [700, 400], [700, 1100], [100, 1100]]
+  packing_area:
+    name: "Packing Area"
+    color: [135, 206, 235]
+    polygon: [[700, 400], [1400, 400], [1400, 1100], [700, 1100]]
+
+# Logging Settings
+logging:
+  enabled: true
+  log_level: "INFO"
+  log_file: "logs/factory_tracking.log"
+  csv_log_file: "logs/tracking_data.csv"
+  live_data_file: "logs/live_stats.json" 
+  save_annotations: true
+  annotation_output_path: "outputs/annotated_videos/"
+
+# Output Settings
+output:
+  show_display: true
+  display_width: 1280
+  display_height: 720
+  save_video: false
+  output_video_path: "outputs/tracked_output.mp4"
+  fps: 15

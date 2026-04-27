@@ -1,0 +1,48 @@
+# ─────────────────────────────────────────
+# CORE COMPUTER VISION
+# ─────────────────────────────────────────
+# opencv-contrib includes ArUco marker detection (replaces plain opencv-python)
+opencv-contrib-python>=4.8.0
+numpy>=1.24.0
+Pillow>=9.0.0
+
+# ─────────────────────────────────────────
+# AI / PERSON DETECTION  (YOLOv8)
+# ─────────────────────────────────────────
+ultralytics>=8.0.0          # YOLOv8 — person detection
+torch>=2.0.0                # PyTorch backend (used by YOLO)
+torchvision>=0.15.0         # Image transforms for torch
+
+# ─────────────────────────────────────────
+# POSE / GESTURE DETECTION
+# ─────────────────────────────────────────
+mediapipe>=0.10.0           # Pose, hand, face landmark detection
+
+# ─────────────────────────────────────────
+# TRACKING & ANNOTATION
+# ─────────────────────────────────────────
+supervision>=0.18.0         # ByteTrack wrapper, bounding box tools, zone crossing
+
+# ─────────────────────────────────────────
+# SPATIAL MAPPING & GEOMETRY
+# ─────────────────────────────────────────
+shapely>=2.0.0              # FOV cones + room boundary clipping
+scipy>=1.9.0                # Distance calculations, spatial math
+
+# ─────────────────────────────────────────
+# FLOOR PLAN / PDF
+# ─────────────────────────────────────────
+PyMuPDF>=1.23.0             # Read factory PDF floor plan
+
+# ─────────────────────────────────────────
+# PLOTTING & VISUALIZATION
+# ─────────────────────────────────────────
+matplotlib>=3.6.0           # FOV map output images
+seaborn>=0.12.0             # Heatmaps, movement analytics plots
+
+# ─────────────────────────────────────────
+# DATA & CONFIG
+# ─────────────────────────────────────────
+pandas>=1.5.0               # CSV reading (employees, camera details)
+pyyaml>=6.0                 # settings.yaml config
+tqdm>=4.64.0                # Progress bars for long video processing

@@ -1,0 +1,165 @@
+# Factory AI Tracking System Configuration
+# Module 1 & 2 Implementation
+
+system:
+  name: "Factory AI Tracking System"
+  version: "1.0.0"
+  factory: "Gumcorp Factory"
+  total_area_sqm: 1824
+  debug: true
+  fps_target: 15
+
+# Camera Configuration
+cameras:
+  - id: "camera_1"
+    video_path: "data/videos/camera_1.mp4"
+    enabled: true
+    position: [0, 0]  # To be calibrated
+    calibration_points:
+      camera_points: []
+      map_points: []
+  
+  - id: "camera_2"
+    video_path: "data/videos/camera_2.mp4"
+    enabled: false
+    position: [0, 0]
+    calibration_points:
+      camera_points: []
+      map_points: []
+
+# Detection Settings (YOLOv8)
+detection:
+  model_path: "yolov8n.pt"
+  confidence_threshold: 0.5
+  iou_threshold: 0.45
+  classes: [0]
+
+# ArUco Settings
+aruco:
+  dictionary_type: "DICT_4X4_50"
+  marker_size_mm: 50.0
+  detection_confidence: 0.8
+
+# Mapping Settings (Homography)
+mapping:
+  floor_plan_path: "data/floor_plan/Gumcorp_Drawing_Wo_Cameras.pdf"
+  floor_plan_analysis: "./floor_plan_analysis.json"
+  coordinate_origin: [0, 0]
+  scale_factor: 50.0  # pixels per meter (50px = 1m)
+  ransac_reproj_threshold: 3.0
+
+# Tracking Settings
+tracking:
+  max_history_length: 100
+  distance_threshold: 50.0
+  missing_frame_threshold: 10
+  fusion_method: "average"
+
+# Behavior Analysis Settings
+behavior:
+  idle_time_threshold: 30
+  walking_speed_threshold: 10.0
+  carrying_proximity_threshold: 100.0
+  machine_interaction_threshold: 20.0
+
+# Zone Definitions (from floor plan analysis)
+zones:
+  loading_bay:
+    name: "Loading Bay"
+    color: [139, 69, 19]
+    polygon: [[100, 400], [700, 400], [700, 1100], [100, 1100]]
+    dimensions_m: [14, 12]
+    area_sqm: 168
+    type: "logistics"
+    
+  packing_area:
+    name: "Packing Area"
+    color: [135, 206, 235]
+    polygon: [[700, 400], [1400, 400], [1400, 1100], [700, 1100]]
+    dimensions_m: [14, 12]
+    area_sqm: 168
+    type: "production"
+    
+  machine_area:
+    name: "Machine Area"
+    color: [255, 0, 255]
+    polygon: [[1400, 400], [2100, 400], [2100, 800], [1400, 800]]
+    dimensions_m: [14, 8]
+    area_sqm: 112
+    type: "production"
+    
+  storage_area:
+    name: "Storage Area"
+    color: [34, 139, 34]
+    polygon: [[700, 1100], [1800, 1100], [1800, 1800], [700, 1800]]
+    dimensions_m: [22, 14]
+    area_sqm: 308
+    type: "storage"
+    
+  office:
+    name: "Office"
+    color: [255, 215, 0]
+    polygon: [[1800, 1400], [2300, 1400], [2300, 1800], [1800, 1800]]
+    dimensions_m: [10, 8]
+    area_sqm: 80
+    type: "admin"
+
+# Entry/Exit Points
+nodes:
+  D1:
+    name: "Loading Bay Roller Shutter 1"
+    type: "vehicle_entry"
+    position: [100, 750]
+    
+  D2:
+    name: "Loading Bay Roller Shutter 2"
+    type: "vehicle_entry"
+    position: [100, 950]
+    
+  D3:
+    name: "Main Factory Entrance"
+    type: "person_entry"
+    position: [700, 750]
+    
+  D4:
+    name: "Office Entrance"
+    type: "person_entry"
+    position: [2050, 1400]
+
+# Machines in Machine Area
+machines:
+  M1:
+    name: "Machine 1"
+    position: [1550, 500]
+    dimensions: [4, 3]
+    area_sqm: 12
+    
+  M2:
+    name: "Machine 2"
+    position: [1750, 500]
+    dimensions: [4, 3]
+    area_sqm: 12
+    
+  M3:
+    name: "Machine 3"
+    position: [1950, 500]
+    dimensions: [4, 3]
+    area_sqm: 12
+
+# Logging Settings
+logging:
+  enabled: true
+  log_level: "INFO"
+  log_file: "logs/factory_tracking.log"
+  csv_log_file: "logs/tracking_data.csv"
+  save_annotations: true
+  annotation_output_path: "outputs/annotated_videos/"
+
+# Output Settings
+output:
+  show_display: true
+  display_width: 1280
+  display_height: 720
+  save_video: false
+  output_video_path: "outputs/tracked_output.mp4"
+  fps: 15

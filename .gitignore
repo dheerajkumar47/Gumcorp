@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+logs/live_stats.json
+logs/current_port.txt
+outputs/live/*
+outputs/paths/*
+!.gitkeep
+*.mp4
+*.pdf
+data/videos/
+models/*.pt
