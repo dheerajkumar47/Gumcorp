@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Factory Intelligence | Overview</title>
+    <link rel="stylesheet" href="/dashboard/assets/app.css">
+</head>
+<body data-page="overview">
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-title">GUMCORP AI</div>
+                <div class="brand-subtitle">Factory operations dashboard</div>
+            </div>
+
+            <div class="nav-group">
+                <div class="nav-label">Pages</div>
+                <a class="nav-link active" href="/dashboard/index.html"><span>Overview</span><span class="nav-meta" id="nav-people">0 detected</span></a>
+                <a class="nav-link" href="/dashboard/employees.html"><span>Employees</span><span class="nav-meta" id="nav-employees">0 tracked</span></a>
+                <a class="nav-link" href="/dashboard/cameras.html"><span>Cameras</span><span class="nav-meta" id="nav-cameras">0 online</span></a>
+                <a class="nav-link" href="/dashboard/system.html"><span>System</span><span class="nav-meta" id="nav-uptime">0s</span></a>
+            </div>
+
+            <div class="sidebar-card">
+                <h3>Feed Health</h3>
+                <div class="health-row"><span>Cameras online</span><strong id="health-cameras">0/0</strong></div>
+                <div class="health-row"><span>People detected</span><strong id="health-people">0</strong></div>
+                <div class="health-row"><span>Runtime device</span><strong id="health-runtime">unknown</strong></div>
+                <div class="health-row"><span>Last update</span><strong id="health-updated">--:--:--</strong></div>
+            </div>
+        </aside>
+
+        <div class="main">
+            <header class="topbar">
+                <div>
+                    <div class="page-title">Overview</div>
+                    <div class="page-subtitle">Live operations summary, health, and activity snapshot</div>
+                </div>
+                <div class="topbar-right">
+                    <div class="status-line"><span class="state-dot" id="status-dot"></span><span id="runtime-label">Waiting for backend data</span></div>
+                    <div id="clock-label">--:--:--</div>
+                </div>
+            </header>
+
+            <main class="content">
+                <div class="content-grid grid-overview">
+                    <section class="kpi-row" style="grid-column: 1 / -1;">
+                        <div class="kpi-card"><strong id="overview-workers">0</strong><span>Tracked workers</span></div>
+                        <div class="kpi-card"><strong id="overview-cameras">0</strong><span>Cameras online</span></div>
+                        <div class="kpi-card"><strong id="overview-people">0</strong><span>People detected</span></div>
+                        <div class="kpi-card"><strong id="overview-uptime">0s</strong><span>Runtime uptime</span></div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-head">
+                            <div class="panel-title" id="overview-live-name">Overview Live</div>
+                            <div class="panel-value" id="overview-live-meta">Waiting for a working camera</div>
+                        </div>
+                        <div class="panel-body">
+                            <div class="live-stage" id="overview-live-stage">
+                                <div class="live-placeholder">No online camera feed</div>
+                                <div class="live-badge" id="overview-live-badge"><span class="pill bad">OFFLINE</span></div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-head">
+                            <div class="panel-title">Active Employees</div>
+                            <div class="panel-value">Latest tracked workers</div>
+                        </div>
+                        <div class="panel-body scroll">
+                            <div class="employee-list" id="overview-active-employees"></div>
+                        </div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-head">
+                            <div class="panel-title">Camera Summary</div>
+                            <div class="panel-value">Live feed status</div>
+                        </div>
+                        <div class="panel-body scroll">
+                            <div class="record-list" id="overview-camera-summary"></div>
+                        </div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-head">
+                            <div class="panel-title">Dashboard Alerts</div>
+                            <div class="panel-value">Backend-derived warnings</div>
+                        </div>
+                        <div class="panel-body scroll">
+                            <div class="alert-list" id="overview-alerts"></div>
+                        </div>
+                    </section>
+
+                    <section class="panel" style="grid-column: 1 / -1;">
+                        <div class="panel-head">
+                            <div class="panel-title">Resources</div>
+                            <div class="panel-value">Current system load</div>
+                        </div>
+                        <div class="panel-body">
+                            <div class="resource-grid">
+                                <div class="resource-card"><strong id="overview-cpu-value">0%</strong><span>CPU</span><div class="bar"><i id="overview-cpu-bar"></i></div></div>
+                                <div class="resource-card"><strong id="overview-ram-value">0%</strong><span>RAM</span><div class="bar"><i id="overview-ram-bar"></i></div></div>
+                                <div class="resource-card"><strong id="overview-gpu-value">0%</strong><span>GPU</span><div class="bar"><i id="overview-gpu-bar"></i></div></div>
+                                <div class="resource-card"><strong id="overview-vram-value">0%</strong><span>VRAM</span><div class="bar"><i id="overview-vram-bar"></i></div></div>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="/dashboard/assets/app.js"></script>
+</body>
+</html>

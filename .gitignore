@@ -1,12 +1,27 @@
 venv/
 __pycache__/
 *.pyc
-logs/live_stats.json
+
+# Runtime logs and dashboard state
+logs/*.log
+logs/*.json
+logs/*.csv
 logs/current_port.txt
+
+# Generated outputs
 outputs/live/*
-outputs/paths/*
-!.gitkeep
-*.mp4
-*.pdf
+outputs/recordings/*
+outputs/results/*
+outputs/maps/*
+outputs/*.mp4
+outputs/*.jpg
+outputs/*.json
+
+# Local evidence uploaded for debugging
+test_records/
+
+# Large local assets
 data/videos/
 models/*.pt
+*.mp4
+*.pdf

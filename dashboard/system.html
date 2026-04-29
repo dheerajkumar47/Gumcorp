@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Factory Intelligence | System</title>
+    <link rel="stylesheet" href="/dashboard/assets/app.css">
+</head>
+<body data-page="system">
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-title">GUMCORP AI</div>
+                <div class="brand-subtitle">Factory operations dashboard</div>
+            </div>
+
+            <div class="nav-group">
+                <div class="nav-label">Pages</div>
+                <a class="nav-link" href="/dashboard/index.html"><span>Overview</span><span class="nav-meta" id="nav-people">0 detected</span></a>
+                <a class="nav-link" href="/dashboard/employees.html"><span>Employees</span><span class="nav-meta" id="nav-employees">0 tracked</span></a>
+                <a class="nav-link" href="/dashboard/cameras.html"><span>Cameras</span><span class="nav-meta" id="nav-cameras">0 online</span></a>
+                <a class="nav-link active" href="/dashboard/system.html"><span>System</span><span class="nav-meta" id="nav-uptime">0s</span></a>
+            </div>
+
+            <div class="sidebar-card">
+                <h3>Feed Health</h3>
+                <div class="health-row"><span>Cameras online</span><strong id="health-cameras">0/0</strong></div>
+                <div class="health-row"><span>People detected</span><strong id="health-people">0</strong></div>
+                <div class="health-row"><span>Runtime device</span><strong id="health-runtime">unknown</strong></div>
+                <div class="health-row"><span>Last update</span><strong id="health-updated">--:--:--</strong></div>
+            </div>
+        </aside>
+
+        <div class="main">
+            <header class="topbar">
+                <div>
+                    <div class="page-title">System</div>
+                    <div class="page-subtitle">Resource load, runtime configuration, acceleration, and feed health</div>
+                </div>
+                <div class="topbar-right">
+                    <div class="status-line"><span class="state-dot" id="status-dot"></span><span id="runtime-label">Waiting for backend data</span></div>
+                    <div id="clock-label">--:--:--</div>
+                </div>
+            </header>
+
+            <main class="content">
+                <div class="content-grid grid-system">
+                    <section class="panel" style="grid-column: 1 / -1;">
+                        <div class="panel-head">
+                            <div class="panel-title">Resources</div>
+                            <div class="panel-value">Current system load</div>
+                        </div>
+                        <div class="panel-body">
+                            <div class="resource-grid">
+                                <div class="resource-card"><strong id="system-cpu-value">0%</strong><span>CPU</span><div class="bar"><i id="system-cpu-bar"></i></div></div>
+                                <div class="resource-card"><strong id="system-ram-value">0%</strong><span>RAM</span><div class="bar"><i id="system-ram-bar"></i></div></div>
+                                <div class="resource-card"><strong id="system-gpu-value">0%</strong><span>GPU</span><div class="bar"><i id="system-gpu-bar"></i></div></div>
+                                <div class="resource-card"><strong id="system-vram-value">0%</strong><span>VRAM</span><div class="bar"><i id="system-vram-bar"></i></div></div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-head">
+                            <div class="panel-title">Runtime</div>
+                            <div class="panel-value">Current backend settings</div>
+                        </div>
+                        <div class="panel-body">
+                            <div class="breakdown">
+                                <div id="system-runtime"></div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-head">
+                            <div class="panel-title">Acceleration</div>
+                            <div class="panel-value">CUDA and device state</div>
+                        </div>
+                        <div class="panel-body">
+                            <div class="breakdown">
+                                <div id="system-acceleration"></div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-head">
+                            <div class="panel-title">System Summary</div>
+                            <div class="panel-value">High-level backend state</div>
+                        </div>
+                        <div class="panel-body">
+                            <div class="two-col" id="system-summary"></div>
+                        </div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-head">
+                            <div class="panel-title">Feed Health</div>
+                            <div class="panel-value">All configured cameras</div>
+                        </div>
+                        <div class="panel-body scroll">
+                            <div class="record-list" id="system-feed-health"></div>
+                        </div>
+                    </section>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="/dashboard/assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Factory Intelligence | Employees</title>
+    <link rel="stylesheet" href="/dashboard/assets/app.css">
+</head>
+<body data-page="employees">
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-title">GUMCORP AI</div>
+                <div class="brand-subtitle">Factory operations dashboard</div>
+            </div>
+
+            <div class="nav-group">
+                <div class="nav-label">Pages</div>
+                <a class="nav-link" href="/dashboard/index.html"><span>Overview</span><span class="nav-meta" id="nav-people">0 detected</span></a>
+                <a class="nav-link active" href="/dashboard/employees.html"><span>Employees</span><span class="nav-meta" id="nav-employees">0 tracked</span></a>
+                <a class="nav-link" href="/dashboard/cameras.html"><span>Cameras</span><span class="nav-meta" id="nav-cameras">0 online</span></a>
+                <a class="nav-link" href="/dashboard/system.html"><span>System</span><span class="nav-meta" id="nav-uptime">0s</span></a>
+            </div>
+
+            <div class="sidebar-card">
+                <h3>Feed Health</h3>
+                <div class="health-row"><span>Cameras online</span><strong id="health-cameras">0/0</strong></div>
+                <div class="health-row"><span>People detected</span><strong id="health-people">0</strong></div>
+                <div class="health-row"><span>Runtime device</span><strong id="health-runtime">unknown</strong></div>
+                <div class="health-row"><span>Last update</span><strong id="health-updated">--:--:--</strong></div>
+            </div>
+        </aside>
+
+        <div class="main">
+            <header class="topbar">
+                <div>
+                    <div class="page-title">Employees</div>
+                    <div class="page-subtitle">Worker list, detail view, current status, and movement recording</div>
+                </div>
+                <div class="topbar-right">
+                    <div class="status-line"><span class="state-dot" id="status-dot"></span><span id="runtime-label">Waiting for backend data</span></div>
+                    <div id="clock-label">--:--:--</div>
+                </div>
+            </header>
+
+            <main class="content">
+                <div class="content-grid grid-employees">
+                    <section class="panel" style="grid-row: 1 / 3;">
+                        <div class="panel-head">
+                            <div class="panel-title">Employee List</div>
+                            <div class="panel-value">Tracked workers</div>
+                        </div>
+                        <div class="panel-body scroll">
+                            <div class="employee-list" id="employees-list"></div>
+                        </div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-head">
+                            <div class="panel-title">Employee Detail</div>
+                            <div class="panel-value">Current worker focus</div>
+                        </div>
+                        <div class="detail-layout">
+                            <div class="detail-col">
+                                <div class="avatar" id="employee-detail-avatar">-</div>
+                                <div class="detail-name" id="employee-detail-name">No employee selected</div>
+                                <div class="detail-sub" id="employee-detail-sub">Select a worker from the list</div>
+                                <div class="detail-grid">
+                                    <div class="mini-card"><strong id="employee-detail-status">-</strong><span>Status</span></div>
+                                    <div class="mini-card"><strong id="employee-detail-camera">-</strong><span>Camera</span></div>
+                                    <div class="mini-card"><strong id="employee-detail-distance">0 ft</strong><span>Distance</span></div>
+                                    <div class="mini-card"><strong id="employee-detail-confidence">0.00</strong><span>Confidence</span></div>
+                                    <div class="mini-card"><strong id="employee-detail-lastseen">0s</strong><span>Last Seen</span></div>
+                                    <div class="mini-card"><strong id="employee-detail-zone">Pending</strong><span>Zone</span></div>
+                                </div>
+                            </div>
+                            <div class="detail-col">
+                                <div class="breakdown">
+                                    <h3>Camera Time</h3>
+                                    <div id="employee-detail-cameras"></div>
+                                </div>
+                                <div class="breakdown">
+                                    <h3>Status Time</h3>
+                                    <div id="employee-detail-statuses"></div>
+                                </div>
+                            </div>
+                            <div class="detail-col">
+                                <div class="video-frame">
+                                    <video id="employee-recording-video" controls muted loop playsinline></video>
+                                </div>
+                                <div class="meta-sub" id="employee-recording-path" style="margin-top: 10px;">No recording</div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-head">
+                            <div class="panel-title">Employee Records</div>
+                            <div class="panel-value">Current backend summary</div>
+                        </div>
+                        <div class="panel-body scroll">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Status</th>
+                                        <th>Camera</th>
+                                        <th>Distance</th>
+                                        <th>Seen</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="employees-table"></tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="/dashboard/assets/app.js"></script>
+</body>
+</html>

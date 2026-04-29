@@ -1,62 +1,79 @@
 # Factory AI Tracking System
 
-Real-time employee tracking, geo-mapping, and behavior analysis inside factories using CCTV cameras and AI models.
+Real-time factory camera monitoring for person detection, ArUco marker identification, movement trails, and operational reporting.
 
-## System Overview
+## Quick Start
 
-This system implements **Module 1** and **Module 2** of the Factory Intelligence Proposal:
-
-- **Module 1 (Day 1-15)**: Factory Understanding + Mapping Foundation
-- **Module 2 (Day 16-30)**: Multi-Camera Tracking + Behavior Analysis
-
-## Project Structure (Professional Sequence)
-
+```powershell
+.\venv\Scripts\python.exe main.py
 ```
+
+Dashboard:
+
+```text
+http://localhost:8000/dashboard.html
+```
+
+## Project Structure
+
+```text
 Factory_Ai_System/
-├── config/             # System configuration (settings.yaml)
-├── data/               # Raw data (floor_plan, videos, markers)
-├── docs/               # Project documentation (Proposals, PDFs)
-├── logs/               # Run-time logs and CSV data
-├── models/             # AI Models (YOLOv8 weights)
-├── outputs/            # Annotated videos and result artifacts
-├── src/                # Core logic (detection, mapping, tracking)
-├── main.py             # Primary entry point for the pipeline
-├── calibrate_fov.py    # Camera FOV and coverage analysis script
-├── dashboard.html      # Visualization dashboard for monthly insights
-├── requirements.txt    # Project dependencies
-└── README.md           # This documentation
+├── config/          Runtime configuration
+├── data/            Employee list, camera details, floor plans, marker images, sample videos
+├── docs/            Proposal and camera layout documents
+├── logs/            Runtime JSON, CSV, and decoder logs
+├── models/          AI model weights
+├── outputs/         Live dashboard images, map artifacts, recordings, and result files
+├── src/             Core runtime, detection, mapping, logging, and utility modules
+├── test_records/    Uploaded screenshots/videos used for debugging
+├── tools/           Maintenance and diagnostic scripts
+├── dashboard.html   Browser dashboard
+├── main.py          Main runtime entry point
+├── requirements.txt Python dependencies
+└── README.md
 ```
 
-## Setup & Usage
+## Main Runtime
 
-### 1. Environment Setup
-```bash
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+The default runtime settings are stored in `config/settings.yaml`, so the normal command is short:
+
+```powershell
+.\venv\Scripts\python.exe main.py
 ```
 
-### 2. Configuration
-Edit `config/settings.yaml` to configure cameras, detection thresholds, and zone coordinates.
+Optional override example:
 
-### 3. Run Analysis
-To process a video feed:
-```bash
-python main.py
+```powershell
+.\venv\Scripts\python.exe main.py --camera-profile main_stream --inference-width 1280 --target-fps 15 --batch-size 4 --device cuda
 ```
 
-To run FOV coverage analysis:
-```bash
-python calibrate_fov.py
+## Important Folders
+
+`outputs/live/` contains live dashboard camera refresh images.
+
+`outputs/recordings/` contains per-employee MP4 movement-trail recordings.
+
+`logs/live_stats.json` is the dashboard data feed.
+
+`logs/employee_records.json` is the latest employee summary.
+
+## Tools
+
+Run helper scripts from the project root:
+
+```powershell
+.\venv\Scripts\python.exe tools\check_ai.py
+.\venv\Scripts\python.exe tools\check_cameras.py
+.\venv\Scripts\python.exe tools\generate_aruco_markers.py
+.\venv\Scripts\python.exe tools\calibrate_fov.py
 ```
 
-## Module 1 & 2 Progress
-- [x] Professional project reorganization
-- [x] Person detection (YOLOv8)
-- [x] ArUco marker identification
-- [x] Homography-based geo-mapping (Ready for calibration)
-- [x] Multi-camera config support
-- [ ] Live Dashboard integration (Ongoing)
+## Current Pipeline
 
-## Output Data
-The system generates CSV logs in `logs/` and annotated videos in `outputs/`. View `dashboard.html` for a summary of insights.
+- Threaded RTSP camera capture
+- Batched YOLO person detection on CUDA when available
+- CPU-worker ArUco marker detection
+- Marker-to-person association before employee tracking
+- Live dashboard output
+- Per-employee MP4 movement-trail recording
+- CPU/RAM/GPU telemetry in `logs/live_stats.json`

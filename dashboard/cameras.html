@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Factory Intelligence | Cameras</title>
+    <link rel="stylesheet" href="/dashboard/assets/app.css">
+</head>
+<body data-page="cameras">
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-title">GUMCORP AI</div>
+                <div class="brand-subtitle">Factory operations dashboard</div>
+            </div>
+
+            <div class="nav-group">
+                <div class="nav-label">Pages</div>
+                <a class="nav-link" href="/dashboard/index.html"><span>Overview</span><span class="nav-meta" id="nav-people">0 detected</span></a>
+                <a class="nav-link" href="/dashboard/employees.html"><span>Employees</span><span class="nav-meta" id="nav-employees">0 tracked</span></a>
+                <a class="nav-link active" href="/dashboard/cameras.html"><span>Cameras</span><span class="nav-meta" id="nav-cameras">0 online</span></a>
+                <a class="nav-link" href="/dashboard/system.html"><span>System</span><span class="nav-meta" id="nav-uptime">0s</span></a>
+            </div>
+
+            <div class="sidebar-card">
+                <h3>Feed Health</h3>
+                <div class="health-row"><span>Cameras online</span><strong id="health-cameras">0/0</strong></div>
+                <div class="health-row"><span>People detected</span><strong id="health-people">0</strong></div>
+                <div class="health-row"><span>Runtime device</span><strong id="health-runtime">unknown</strong></div>
+                <div class="health-row"><span>Last update</span><strong id="health-updated">--:--:--</strong></div>
+            </div>
+        </aside>
+
+        <div class="main">
+            <header class="topbar">
+                <div>
+                    <div class="page-title">Cameras</div>
+                    <div class="page-subtitle">Live feed selection, per-camera state, and capture health</div>
+                </div>
+                <div class="topbar-right">
+                    <div class="status-line"><span class="state-dot" id="status-dot"></span><span id="runtime-label">Waiting for backend data</span></div>
+                    <div id="clock-label">--:--:--</div>
+                </div>
+            </header>
+
+            <main class="content">
+                <div class="content-grid grid-cameras">
+                    <section class="panel">
+                        <div class="panel-head">
+                            <div class="panel-title">Camera List</div>
+                            <div class="panel-value">Select a live camera</div>
+                        </div>
+                        <div class="panel-body scroll">
+                            <div class="camera-list" id="cameras-list"></div>
+                        </div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-head">
+                            <div class="panel-title" id="camera-live-name">Camera View</div>
+                            <div class="panel-value" id="camera-live-meta">Waiting for a working camera</div>
+                        </div>
+                        <div class="panel-body">
+                            <div class="live-stage" id="camera-live-stage">
+                                <div class="live-placeholder">No online camera feed</div>
+                                <div class="live-badge" id="camera-live-badge"><span class="pill bad">OFFLINE</span></div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="panel">
+                        <div class="panel-head">
+                            <div class="panel-title">Camera Health</div>
+                            <div class="panel-value">Selected camera state</div>
+                        </div>
+                        <div class="panel-body">
+                            <div class="breakdown">
+                                <h3>Status</h3>
+                                <div class="row"><span>State</span><strong id="camera-status-label">-</strong></div>
+                                <div class="row"><span>Last Error</span><strong id="camera-status-error">-</strong></div>
+                                <div class="row"><span>People Detected</span><strong id="camera-status-people">0</strong></div>
+                                <div class="row"><span>Seconds Since Frame</span><strong id="camera-status-seen">-</strong></div>
+                                <div class="row"><span>Reconnects</span><strong id="camera-status-reconnects">0</strong></div>
+                                <div class="row"><span>Frames Read</span><strong id="camera-status-frames">0</strong></div>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="/dashboard/assets/app.js"></script>
+</body>
+</html>

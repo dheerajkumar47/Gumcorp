@@ -18,7 +18,7 @@ def generate_fov_cone(cx, cy, angle_deg, fov_angle=90, radius=300):
     return Polygon(points)
 
 def main():
-    pdf_path = "docs/GC Cameras CCTV Updated April 2026 Rev 01 (2).pdf"
+    pdf_path = "docs/camera_layout_rev01.pdf"
     doc = fitz.open(pdf_path)
     page = doc.load_page(0)
     pix = page.get_pixmap(dpi=150)
@@ -100,7 +100,8 @@ def main():
     plt.axis('off')
     
     # Save to your local desktop folder so you can see it easily
-    out_path = Path("outputs/factory_blind_spots_FINAL.jpg")
+    out_path = Path("outputs/maps/factory_blind_spots_final.jpg")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out_path, dpi=200, bbox_inches='tight')
     print(f"Saved perfect targeted map to {out_path}")
 
