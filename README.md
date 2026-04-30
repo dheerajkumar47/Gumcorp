@@ -65,7 +65,14 @@ Run helper scripts from the project root:
 .\venv\Scripts\python.exe tools\check_ai.py
 .\venv\Scripts\python.exe tools\check_cameras.py
 .\venv\Scripts\python.exe tools\generate_aruco_markers.py
-.\venv\Scripts\python.exe tools\calibrate_fov.py
+```
+
+Map analysis scripts:
+
+```powershell
+.\venv\Scripts\python.exe tools\map_analysis\render_rev03_manual_layout.py
+.\venv\Scripts\python.exe tools\map_analysis\render_camera_coverage.py sheetline
+.\venv\Scripts\python.exe tools\map_analysis\generate_test_heatmap.py
 ```
 
 ## Current Pipeline

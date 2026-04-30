@@ -1,0 +1,258 @@
+version: 2
+source:
+  image: docs/rev03_page1.png
+  collected_on: 2026-04-30
+  notes:
+    - Manual user-provided rev03 points.
+    - Only explicit wall, doorway, and open-space relations from the user are encoded.
+    - Gap between point_17 and point_25 is intentionally left open for the sheet line machine.
+
+calibration:
+  status: invalidated
+  note: Previous rev02 dimension calibration removed because the assumed references were wrong.
+
+points:
+  point_01: [2746, 1657]
+  point_02: [2669, 1660]
+  point_03: [2666, 1226]
+  point_04: [2666, 1169]
+  point_05: [2443, 1169]
+  point_06: [2377, 1171]
+  point_07: [2377, 1206]
+  point_08: [2377, 1249]
+  point_09: [2377, 1583]
+  point_10: [2374, 1657]
+  point_11: [2666, 1660]
+  point_12: [2966, 1660]
+  point_13: [2994, 1654]
+  point_14: [3246, 1660]
+  point_15: [3306, 1660]
+  point_16: [3306, 1606]
+  point_17: [3311, 1029]
+  point_18: [3309, 1657]
+  point_19: [3617, 1657]
+  point_20: [3620, 1169]
+  point_21: [3617, 1140]
+  point_22: [3617, 840]
+  point_23: [3614, 657]
+  point_24: [3303, 666]
+  point_25: [3309, 920]
+  point_26: [3303, 666]
+  point_27: [3137, 660]
+  point_28: [3057, 666]
+  point_29: [3057, 751]
+  point_30: [3009, 751]
+  point_31: [2980, 751]
+  point_32: [2980, 914]
+  point_33: [2920, 917]
+  point_34: [2668, 914]
+  point_35: [2668, 661]
+  point_36: [2979, 661]
+  point_37: [3051, 659]
+  point_38: [2670, 657]
+  point_39: [2668, 1156]
+  point_40: [2996, 1169]
+
+doorways:
+  - {from: point_01, to: point_02, label: main_entrance_01_main_exit_01}
+  - {from: point_03, to: point_04, label: gc_production2_entry_exit}
+  - {from: point_05, to: point_06, label: corridor_door_gc_production2}
+  - {from: point_07, to: point_08, label: powder_gum_entry_exit}
+  - {from: point_09, to: point_10, label: packing_room_entry_exit}
+  - {from: point_15, to: point_16, label: mixers_area_entry_exit}
+  - {from: point_30, to: point_31, label: door}
+  - {from: point_32, to: point_33, label: cooling_room2_entry_exit}
+
+open_paths:
+  - {from: point_10, to: point_11, label: gc_production2_open_space}
+  - {from: point_39, to: point_40, label: no_wall_marked}
+
+walls:
+  - {from: point_02, to: point_03}
+  - {from: point_04, to: point_05}
+  - {from: point_06, to: point_07}
+  - {from: point_08, to: point_09}
+  - {from: point_01, to: point_14}
+  - {from: point_14, to: point_15}
+  - {from: point_15, to: point_19}
+  - {from: point_16, to: point_17}
+  - {from: point_19, to: point_20}
+  - {from: point_20, to: point_21}
+  - {from: point_21, to: point_22}
+  - {from: point_22, to: point_23}
+  - {from: point_23, to: point_24}
+  - {from: point_24, to: point_25}
+  - {from: point_26, to: point_27}
+  - {from: point_27, to: point_28}
+  - {from: point_28, to: point_29}
+  - {from: point_29, to: point_30}
+  - {from: point_31, to: point_32}
+  - {from: point_33, to: point_34}
+  - {from: point_34, to: point_35}
+  - {from: point_34, to: point_39}
+  - {from: point_35, to: point_36}
+  - {from: point_28, to: point_36}
+  - {from: point_36, to: point_31}
+
+cameras:
+  - {point: point_10, id: gc_production2}
+  - {point: point_12, id: production_outside}
+  - {point: point_13, id: palletline}
+  - {point: point_19, id: mixer3}
+  - {point: point_20, id: mixer2}
+  - {point: point_21, id: mixer1}
+  - {point: point_22, id: mixer4}
+  - {point: point_27, id: sheetline}
+  - {point: point_35, id: cooling_room2}
+  - {point: point_40, id: main_production}
+
+camera_coverage_estimates:
+  - id: sheetline
+    source_images:
+      - outputs/live/sheetline.jpg
+      - outputs/maps/frames/Sheet line camera_mid.jpg
+      - outputs/maps/frames/Sheet line camera sample 2_mid.jpg
+    confidence: user_confirmed_clear_zone
+    notes:
+      - Clear visible sheetline camera coverage only.
+      - Other areas are not marked because they are not clearly visible.
+    visible_polygon:
+      - [3251, 774]
+      - [3306, 906]
+      - [3303, 931]
+      - [3209, 934]
+      - [3120, 931]
+      - [3117, 1166]
+      - [3009, 1146]
+      - [2980, 920]
+      - [3003, 803]
+      - [3057, 760]
+      - [3103, 703]
+      - [3249, 703]
+      - [3246, 769]
+  - id: gc_production2
+    source_images:
+      - outputs/maps/frames/GC_Production_2_start.jpg
+      - outputs/maps/frames/GC_Production_2_mid.jpg
+      - outputs/maps/frames/GC_Production_2_late.jpg
+    confidence: video_estimated_clear_zone
+    notes:
+      - Visible coverage estimated from GC Production 2 video frames.
+      - Green area is the clear visible floor where worker tracking should be reliable.
+      - Red area is blocked by stored material or equipment and should be treated as weak or blind coverage.
+    visible_polygon:
+      - [2392, 1648]
+      - [2660, 1648]
+      - [2660, 1228]
+      - [2450, 1180]
+      - [2379, 1180]
+      - [2379, 1580]
+    blocked_polygon:
+      - [2486, 1288]
+      - [2660, 1288]
+      - [2660, 1648]
+      - [2460, 1648]
+      - [2460, 1442]
+  - id: palletline
+    source_images:
+      - outputs/live/palletline.jpg
+    confidence: snapshot_estimated_clear_zone
+    notes:
+      - Estimated from the pallet line live snapshot.
+      - Camera covers the pallet machine side plus the adjacent walking lane.
+      - Blue stacked material and machine body create partial blocking inside the footprint.
+    visible_polygon:
+      - [2996, 1652]
+      - [3304, 1652]
+      - [3306, 1472]
+      - [3242, 1378]
+      - [3190, 1248]
+      - [3135, 1110]
+      - [3078, 1010]
+      - [3016, 932]
+      - [2988, 1098]
+      - [2986, 1408]
+    blocked_polygon:
+      - [3098, 1210]
+      - [3218, 1210]
+      - [3254, 1466]
+      - [3102, 1472]
+      - [3038, 1334]
+  - id: main_production
+    source_images:
+      - outputs/live/main_production.jpg
+    confidence: snapshot_estimated_clear_zone
+    notes:
+      - Estimated from the main production live snapshot.
+      - Camera sees most of the open main production floor.
+      - Stacked cartons along the right wall create blocked floor behind them.
+    visible_polygon:
+      - [2686, 1648]
+      - [3298, 1648]
+      - [3298, 1042]
+      - [3168, 1036]
+      - [3006, 1118]
+      - [2810, 1224]
+      - [2684, 1300]
+    blocked_polygon:
+      - [3120, 1154]
+      - [3300, 1154]
+      - [3300, 1648]
+      - [3150, 1648]
+      - [3052, 1432]
+
+reference_points:
+  - {point: point_17, label: near_sheetline_machine}
+  - {point: point_25, label: near_sheetline_machine}
+  - {point: point_18, label: lower_main_production_edge}
+
+pillars:
+  - {point: point_39, label: pillar}
+  - {point: point_40, label: pillar}
+  - {x: 3303, y: 1157, label: pillar_near_point_17}
+
+zones:
+  - id: main_production_zone
+    label: Main Production Zone
+    points: [point_01, point_15, point_16, point_17, point_25, point_26, point_35, point_34, point_39, point_02]
+    cameras: [main_production, palletline, sheetline]
+    metrics:
+      area_px2: 636430.5
+      area_sqft: 6135.2
+      area_sqm: 569.98
+      width_ft: null
+      height_ft: null
+      source: approved_separate_zone_value
+  - id: cooling_room2_zone
+    label: Cooling Room 2 Zone
+    points: [point_32, point_33, point_34, point_35, point_36]
+    cameras: [cooling_room2]
+    metrics:
+      area_px2: 79277.5
+      area_sqft: 873.1
+      area_sqm: 81.11
+      width_ft: null
+      height_ft: null
+      source: approved_current_value
+  - id: mixers_zone
+    label: Mixers Zone
+    points: [point_15, point_19, point_23, point_26, point_25, point_17, point_16]
+    cameras: [mixer1, mixer2, mixer3, mixer4]
+    metrics:
+      area_px2: 306715.5
+      area_sqft: 3157.2
+      area_sqm: 293.31
+      width_ft: 30.3333
+      height_ft: 104.0833
+      source: rev02_manual_dimension
+  - id: gc_production2_zone
+    label: GC Production 2 Zone
+    points: [point_02, point_03, point_04, point_05, point_06, point_07, point_08, point_09, point_10]
+    cameras: [gc_production2]
+    metrics:
+      area_px2: 142161.5
+      area_sqft: 1820.0
+      area_sqm: 169.08
+      width_ft: 35.0
+      height_ft: 52.0
+      source: user_corrected_dimension
