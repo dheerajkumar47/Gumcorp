@@ -128,6 +128,21 @@
         </div>
     </div>
 
+    <div class="camera-modal" id="camera-modal" aria-hidden="true">
+        <div class="camera-modal-panel">
+            <div class="camera-modal-head">
+                <div>
+                    <div class="panel-title" id="camera-modal-title">Camera View</div>
+                    <div class="panel-value" id="camera-modal-meta">Live preview</div>
+                </div>
+                <button class="icon-btn" id="camera-modal-close" type="button">Close</button>
+            </div>
+            <div class="camera-modal-body">
+                <img id="camera-modal-img" data-live-slot="camera-modal" alt="camera modal preview" style="visibility:hidden">
+            </div>
+        </div>
+    </div>
+
     <script src="/dashboard/assets/app.js"></script>
 </body>
 </html>

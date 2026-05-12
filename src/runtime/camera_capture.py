@@ -17,6 +17,7 @@ class ThreadedCamera:
         video_path: str,
         video_playlist: Optional[Sequence[str]] = None,
         video_start_offset_seconds: float = 0.0,
+        replay_speed: float = 1.0,
         width: Optional[int] = None,
         height: Optional[int] = None,
         fps: Optional[int] = None,
@@ -31,6 +32,8 @@ class ThreadedCamera:
             self.video_playlist = [str(video_path)]
         self._source_index = 0
         self._start_offset_seconds = max(0.0, float(video_start_offset_seconds or 0.0))
+        self.replay_speed = max(0.1, float(replay_speed or 1.0))
+        self._replay_stride = max(1, int(round(self.replay_speed)))
         self.width = width
         self.height = height
         self.fps = fps
@@ -80,6 +83,8 @@ class ThreadedCamera:
                 "source": self._current_source(),
                 "playlist_index": self._source_index if len(self.video_playlist) > 1 else None,
                 "playlist_size": len(self.video_playlist) if len(self.video_playlist) > 1 else None,
+                "replay_speed": self.replay_speed if self._is_file_source(self._current_source()) else None,
+                "replay_stride": self._replay_stride if self._is_file_source(self._current_source()) else None,
             }
 
     def _current_source(self) -> str:
@@ -165,4 +170,7 @@ class ThreadedCamera:
                 self._last_error = ""
             self._err_count = 0
             if self._is_file_source(self.video_path) and self.fps:
+                if self._replay_stride > 1 and self._cap is not None:
+                    next_frame = self._cap.get(cv2.CAP_PROP_POS_FRAMES) + self._replay_stride - 1
+                    self._cap.set(cv2.CAP_PROP_POS_FRAMES, next_frame)
                 time.sleep(max(0.001, 1.0 / float(self.fps)))

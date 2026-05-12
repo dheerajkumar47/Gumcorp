@@ -1,9 +1,10 @@
 param(
     [ValidateSet("auto", "cpu", "cuda")]
     [string]$Device = "cuda",
+    [double]$ReplaySpeed = 20,
     [int]$InferenceWidth = 1280,
-    [double]$TargetFps = 15,
-    [int]$BatchSize = 4
+    [double]$TargetFps = 30,
+    [int]$BatchSize = 6
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,4 +17,5 @@ Set-Location $RepoRoot
     --inference-width $InferenceWidth `
     --target-fps $TargetFps `
     --batch-size $BatchSize `
-    --device $Device
+    --device $Device `
+    --replay-speed $ReplaySpeed

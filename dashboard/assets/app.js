@@ -25,6 +25,7 @@ const DashboardApp = (() => {
         page: document.body.dataset.page || "overview",
         cameraListSignature: "",
         selectedLiveCameraId: null,
+        modalCameraId: null,
         liveRefreshBusy: {},
     };
 
@@ -198,6 +199,11 @@ const DashboardApp = (() => {
         if (cameraOnline(workerCamera)) {
             const img = document.getElementById("employee-live-preview");
             if (img && img.style.display !== "none") refreshLiveImage(img, workerCamera.live_view);
+        }
+        const modalCamera = cameras.find((camera) => camera.id === state.modalCameraId);
+        if (cameraOnline(modalCamera)) {
+            const img = document.getElementById("camera-modal-img");
+            if (img) refreshLiveImage(img, modalCamera.live_view);
         }
     }
 
@@ -547,6 +553,17 @@ const DashboardApp = (() => {
     function renderCamerasPage() {
         const cameras = state.data.cameras || [];
         const selected = cameras.find((camera) => camera.id === state.selectedCameraId) || null;
+        const modal = document.getElementById("camera-modal");
+        const modalCamera = cameras.find((camera) => camera.id === state.modalCameraId);
+        if (modal) {
+            modal.classList.toggle("open", Boolean(modalCamera));
+            modal.setAttribute("aria-hidden", modalCamera ? "false" : "true");
+            if (modalCamera) {
+                setText("camera-modal-title", modalCamera.id);
+                setText("camera-modal-meta", `${modalCamera.person_count || 0} people detected`);
+                refreshLiveImage(document.getElementById("camera-modal-img"), modalCamera.live_view);
+            }
+        }
         const listSignature = cameras.map((camera) => camera.id).join("|");
         if (state.cameraListSignature !== listSignature) {
             state.cameraListSignature = listSignature;
@@ -756,8 +773,15 @@ const DashboardApp = (() => {
                 const camera = (state.data.cameras || []).find((item) => item.id === id);
                 if (cameraOnline(camera)) {
                     state.selectedCameraId = id;
+                    if (state.page === "cameras") state.modalCameraId = id;
                     render();
                 }
+                return;
+            }
+
+            if (event.target.id === "camera-modal-close" || event.target.id === "camera-modal") {
+                state.modalCameraId = null;
+                render();
                 return;
             }
 

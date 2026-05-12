@@ -315,6 +315,41 @@ button {
     gap: 10px;
 }
 
+.camera-list {
+    gap: 8px;
+}
+
+.camera-list .camera-card {
+    display: grid;
+    grid-template-columns: 116px minmax(0, 1fr);
+    min-height: 76px;
+    cursor: pointer;
+}
+
+.camera-list .camera-frame {
+    height: 76px;
+    aspect-ratio: auto;
+    border-bottom: 0;
+    border-right: 1px solid var(--line);
+}
+
+.camera-list .camera-meta {
+    padding: 10px 12px;
+    align-self: center;
+}
+
+.camera-list .camera-name {
+    font-size: 13px;
+}
+
+.camera-list .meta-sub {
+    font-size: 11px;
+}
+
+.camera-list .pill {
+    padding: 3px 8px;
+}
+
 .camera-card,
 .employee-card,
 .alert-card,
@@ -461,6 +496,64 @@ button {
     position: absolute;
     top: 14px;
     right: 14px;
+}
+
+.camera-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 28px;
+    background: rgba(18, 30, 24, 0.35);
+}
+
+.camera-modal.open {
+    display: flex;
+}
+
+.camera-modal-panel {
+    width: min(980px, 82vw);
+    max-height: 86vh;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel);
+    box-shadow: 0 20px 60px rgba(18, 30, 24, 0.25);
+    overflow: hidden;
+}
+
+.camera-modal-head {
+    height: 58px;
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--line);
+}
+
+.camera-modal-body {
+    background: #dfe5d9;
+    display: grid;
+    place-items: center;
+}
+
+.camera-modal-body img {
+    width: 100%;
+    max-height: calc(86vh - 58px);
+    object-fit: contain;
+    display: block;
+    background: #edf2e8;
+}
+
+.icon-btn {
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--ink);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font: inherit;
+    cursor: pointer;
 }
 
 .detail-layout {

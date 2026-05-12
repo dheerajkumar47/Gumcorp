@@ -122,6 +122,7 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=None, help="Max camera frames per YOLO batch")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto", help="Inference device")
     parser.add_argument("--camera-registry", default=None, help="Override camera registry JSON file")
+    parser.add_argument("--replay-speed", type=float, default=None, help="Local video replay speed multiplier")
     return parser.parse_args()
 
 def get_runtime_config(config, args):
@@ -133,6 +134,7 @@ def get_runtime_config(config, args):
         "camera_profile_settings": profile,
         "inference_width": max(160, int(args.inference_width or runtime.get("inference_width", 1024))),
         "target_fps": max(1.0, float(args.target_fps or config.get("system", {}).get("fps_target", 15))),
+        "replay_speed": max(0.1, float(args.replay_speed or runtime.get("replay_speed", 1.0))),
         "batch_size": max(1, int(args.batch_size or runtime.get("batch_size", 8))),
         "aruco_max_width": max(160, int(runtime.get("aruco_max_width", 1920))),
         "aruco_every_n_frames": max(1, int(runtime.get("aruco_every_n_frames", 3))),
@@ -378,18 +380,50 @@ def expanded_contains(box, point, margin_ratio):
 def marker_area(corners):
     return float(cv2.contourArea(corners.astype(np.float32)))
 
+def bbox_center(box):
+    x1, y1, x2, y2 = box
+    return np.array([(x1 + x2) / 2.0, (y1 + y2) / 2.0], dtype=np.float32)
+
+def bbox_area(box):
+    x1, y1, x2, y2 = box
+    return max(0.0, float(x2 - x1)) * max(0.0, float(y2 - y1))
+
+def bbox_iou(box_a, box_b):
+    ax1, ay1, ax2, ay2 = box_a
+    bx1, by1, bx2, by2 = box_b
+    ix1 = max(ax1, bx1)
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+    iw = max(0.0, float(ix2 - ix1))
+    ih = max(0.0, float(iy2 - iy1))
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    union = bbox_area(box_a) + bbox_area(box_b) - inter
+    if union <= 0:
+        return 0.0
+    return inter / union
+
 def find_person_for_marker(marker_center, person_boxes, margin_ratio):
-    containing = [
+    strict_containing = [
+        person for person in person_boxes
+        if expanded_contains(person["bbox"], marker_center, 0.0)
+    ]
+    containing = strict_containing or [
         person for person in person_boxes
         if expanded_contains(person["bbox"], marker_center, margin_ratio)
     ]
     if not containing:
         return None
-    px, py = marker_center
+    marker_point = np.array(marker_center, dtype=np.float32)
     return min(
         containing,
-        key=lambda person: abs(((person["bbox"][0] + person["bbox"][2]) / 2) - px)
-        + abs(((person["bbox"][1] + person["bbox"][3]) / 2) - py),
+        key=lambda person: (
+            float(np.linalg.norm(bbox_center(person["bbox"]) - marker_point)),
+            bbox_area(person["bbox"]),
+            -float(person.get("confidence", 0.0)),
+        ),
     )
 
 def person_floor_point(person):
@@ -403,6 +437,7 @@ def find_continuation_person(worker_state, person_boxes, used_box_ids, max_radiu
     if not last_points:
         return None
     last_pos = np.array(last_points[-1], dtype=np.float32)
+    last_bbox = worker_state.get("last_bbox")
     candidates = []
     for idx, person in enumerate(person_boxes):
         if idx in used_box_ids:
@@ -410,10 +445,17 @@ def find_continuation_person(worker_state, person_boxes, used_box_ids, max_radiu
         floor_pos = person_floor_point(person)
         distance_px = float(np.linalg.norm(floor_pos - last_pos))
         if distance_px <= max_radius_px:
-            candidates.append((distance_px, idx, person))
+            iou = bbox_iou(last_bbox, person["bbox"]) if last_bbox else 0.0
+            area_penalty = 0.0
+            if last_bbox:
+                prev_area = max(1.0, bbox_area(last_bbox))
+                next_area = max(1.0, bbox_area(person["bbox"]))
+                area_penalty = abs(np.log(next_area / prev_area))
+            score = distance_px - (iou * 120.0) + (area_penalty * 35.0)
+            candidates.append((score, distance_px, idx, person))
     if not candidates:
         return None
-    _, idx, person = min(candidates, key=lambda item: item[0])
+    _, _, idx, person = min(candidates, key=lambda item: item[0])
     used_box_ids.add(idx)
     return person
 
@@ -456,10 +498,25 @@ def build_employee_record(marker_id, worker_state, now_ts):
         "last_seen_age": round(now_ts - worker_state.get("last_seen_ts", now_ts), 2),
         "person_conf": round(worker_state.get("person_conf", 0.0), 3),
         "distance_method": worker_state.get("distance_method", "unknown"),
+        "tracking_mode": worker_state.get("tracking_mode", "unknown"),
         "camera_times_sec": {k: round(v, 2) for k, v in worker_state.get("camera_times", {}).items()},
         "status_times_sec": {k: round(v, 2) for k, v in worker_state.get("status_times", {}).items()},
-        "path_view": worker_state.get("path_view", f"/outputs/recordings/{marker_id}.mp4"),
+        "path_view": worker_state.get("path_view", recording_view_path(marker_id, worker_state["name"], worker_state.get("cam_id", "unknown"))),
     }
+
+def safe_filename(value):
+    cleaned = "".join(ch if ch.isalnum() else "_" for ch in str(value).strip())
+    cleaned = "_".join(part for part in cleaned.split("_") if part)
+    return cleaned or "employee"
+
+def recording_filename(marker_id, employee_name, cam_id):
+    return f"{marker_id}_{safe_filename(employee_name)}_{safe_filename(cam_id)}.mp4"
+
+def recording_disk_path(marker_id, employee_name, cam_id):
+    return f"outputs/recordings/{recording_filename(marker_id, employee_name, cam_id)}"
+
+def recording_view_path(marker_id, employee_name, cam_id):
+    return f"/outputs/recordings/{recording_filename(marker_id, employee_name, cam_id)}"
 
 def write_jpeg_atomic(path, frame, quality):
     temp_path = path.replace(".jpg", "_tmp.jpg")
@@ -625,6 +682,7 @@ def build_threaded_camera(cam, runtime):
         video_path=source,
         video_playlist=cam.get("video_playlist") or None,
         video_start_offset_seconds=cam.get("video_start_offset_seconds", 0.0),
+        replay_speed=runtime["replay_speed"],
         width=cap_width,
         height=cap_height,
         fps=profile.get("fps"),
@@ -766,6 +824,7 @@ def main():
                     "performance": monitor.sample(),
                     "runtime": {
                         "camera_profile": runtime["camera_profile"],
+                        "replay_speed": runtime["replay_speed"],
                         "inference_width": runtime["inference_width"],
                         "aruco_max_width": runtime["aruco_max_width"],
                         "aruco_every_n_frames": runtime["aruco_every_n_frames"],
@@ -834,6 +893,7 @@ def main():
                         classes=classes,
                         verbose=False,
                         device=device,
+                        half=(device == "cuda"),
                     )
 
                     for item, results in zip(frame_batch, results_batch):
@@ -910,8 +970,11 @@ def main():
                                         "person_conf": matched_person["confidence"],
                                         "camera_times": {},
                                         "status_times": {"WALKING": 0.0, "WORKING": 0.0},
-                                        "path_view": f"/outputs/recordings/{marker_id}_{cam_id}.mp4",
+                                        "path_view": recording_view_path(marker_id, emp["name"], cam_id),
                                         "cam_id": cam_id,
+                                        "last_bbox": matched_person["bbox"],
+                                        "last_visual_frame": -1,
+                                        "tracking_mode": "aruco",
                                     }
 
                                 worker_state = history[marker_id]
@@ -931,13 +994,19 @@ def main():
                                     worker_state["person_conf"] = matched_person["confidence"]
                                     worker_state["status"] = "WORKING"
                                     worker_state["distance_method"] = calibration.get("method", "legacy_video_pixels")
-                                    worker_state["path_view"] = f"/outputs/recordings/{marker_id}_{cam_id}.mp4"
+                                    worker_state["path_view"] = recording_view_path(marker_id, worker_state["name"], cam_id)
+                                    worker_state["last_bbox"] = matched_person["bbox"]
+                                    worker_state["tracking_mode"] = "aruco"
+                                    worker_state["last_visual_frame"] = loop_counter
                                     continue
 
                                 worker_state["last_seen_ts"] = now_ts
                                 worker_state["last_marker_seen_ts"] = now_ts
                                 worker_state["person_conf"] = matched_person["confidence"]
-                                worker_state["path_view"] = f"/outputs/recordings/{marker_id}_{cam_id}.mp4"
+                                worker_state["path_view"] = recording_view_path(marker_id, worker_state["name"], cam_id)
+                                worker_state["last_bbox"] = matched_person["bbox"]
+                                worker_state["tracking_mode"] = "aruco"
+                                worker_state["last_visual_frame"] = loop_counter
                                 worker_state.setdefault("camera_paths", {}).setdefault(cam_id, worker_state.get("path", [floor_pos.tolist()]))
                                 worker_state["path"] = worker_state["camera_paths"][cam_id]
                                 worker_state["pos_buffer"].append(floor_pos)
@@ -1010,7 +1079,10 @@ def main():
 
                             worker_state["last_seen_ts"] = now_ts
                             worker_state["person_conf"] = min(worker_state.get("person_conf", 0.0), matched_person["confidence"])
-                            worker_state["path_view"] = f"/outputs/recordings/{marker_id}_{cam_id}.mp4"
+                            worker_state["path_view"] = recording_view_path(marker_id, worker_state["name"], cam_id)
+                            worker_state["last_bbox"] = matched_person["bbox"]
+                            worker_state["tracking_mode"] = "marker_hidden"
+                            worker_state["last_visual_frame"] = loop_counter
                             worker_state.setdefault("camera_paths", {}).setdefault(cam_id, worker_state.get("path", [floor_pos.tolist()]))
                             worker_state["path"] = worker_state["camera_paths"][cam_id]
                             worker_state["pos_buffer"].append(floor_pos)
@@ -1098,7 +1170,7 @@ def main():
                     account_worker_time(state, now_ts, runtime["marker_stale_after_seconds"])
                     current_cam = state.get("cam_id", "unknown")
                     state["path"] = state.get("camera_paths", {}).get(current_cam, state.get("path", []))
-                    state["path_view"] = f"/outputs/recordings/{mid}_{current_cam}.mp4"
+                    state["path_view"] = recording_view_path(mid, state["name"], current_cam)
                     employee_record = build_employee_record(mid, state, now_ts)
                     employee_records.append(employee_record)
 
@@ -1109,13 +1181,13 @@ def main():
 
                     if target_frame is not None:
                         path_frame = target_frame.copy()
-                        if state["path"]:
+                        if state["path"] and state.get("last_visual_frame") == loop_counter:
                             pts = np.array(state["path"], np.int32).reshape((-1, 1, 2))
                             cv2.polylines(path_frame, [pts], False, (0, 255, 255), 3)
                             cv2.circle(path_frame, tuple(pts[-1][0]), 8, (0, 0, 255), -1)
                         cv2.putText(
                             path_frame,
-                            f"{state['name']} | {current_cam} | {state['status']} | {state['dist']:.2f} ft",
+                            f"{state['name']} | {current_cam} | {state['status']} | {state.get('tracking_mode', 'unknown')} | {state['dist']:.2f} ft",
                             (20, 40),
                             cv2.FONT_HERSHEY_SIMPLEX,
                             0.8,
@@ -1123,7 +1195,7 @@ def main():
                             2,
                         )
                         path_frame, _ = resize_to_width(path_frame, runtime["dashboard_image_width"])
-                        path_video_recorder.write(f"outputs/recordings/{mid}_{current_cam}.mp4", path_frame)
+                        path_video_recorder.write(recording_disk_path(mid, state["name"], current_cam), path_frame)
 
                     frame_data["stats"].append(employee_record)
 
