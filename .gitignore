@@ -1,14 +1,20 @@
-eras ovenv/
+venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # Runtime logs and dashboard state
+logs/
 logs/*.log
 logs/*.json
 logs/*.csv
 logs/current_port.txt
+data/cameras.json
 
 # Generated outputs
+outputs/
 outputs/live/*
 outputs/recordings/*
 outputs/results/*
@@ -19,9 +25,12 @@ outputs/*.json
 
 # Local evidence uploaded for debugging
 test_records/
+test record/
+experiments/
 
 # Large local assets
 data/videos/
 models/*.pt
 *.mp4
 *.pdf
+docs/

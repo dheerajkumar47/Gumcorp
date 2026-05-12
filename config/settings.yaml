@@ -34,6 +34,7 @@ runtime:
   min_marker_area: 80
   employee_records_file: "logs/employee_records.json"
   jpeg_quality_live: 65
+  camera_registry_file: "data/cameras.json"
 
 camera_profiles:
   main_stream:

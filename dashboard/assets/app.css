@@ -554,7 +554,8 @@ button {
     overflow: hidden;
 }
 
-.video-frame video {
+.video-frame video,
+.video-frame img {
     width: 100%;
     height: 100%;
     display: block;
@@ -633,6 +634,119 @@ button {
     gap: 16px;
 }
 
+.management-grid {
+    display: grid;
+    grid-template-columns: 360px minmax(0, 1fr);
+    gap: 16px;
+}
+
+.section-label {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 10px;
+}
+
+.management-list,
+.management-form {
+    min-width: 0;
+}
+
+.form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.form-grid label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.form-grid label.full {
+    grid-column: 1 / -1;
+}
+
+.form-grid input,
+.form-grid textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.78);
+    color: var(--text);
+    font: inherit;
+}
+
+.checkbox-row {
+    flex-direction: row !important;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.78);
+}
+
+.checkbox-row input {
+    width: 18px;
+    height: 18px;
+}
+
+.action-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.action-btn {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.9);
+    color: var(--text);
+    padding: 10px 14px;
+    cursor: pointer;
+}
+
+.action-btn.accent {
+    border-color: rgba(44, 122, 90, 0.4);
+    background: rgba(44, 122, 90, 0.1);
+}
+
+.registry-card {
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel-2);
+    cursor: pointer;
+}
+
+.registry-card.active {
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1px rgba(44, 122, 90, 0.14);
+}
+
+.camera-test-preview {
+    margin-top: 14px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.55);
+    min-height: 120px;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+}
+
+.camera-test-preview img {
+    width: 100%;
+    display: block;
+}
+
 .message-box {
     padding: 18px;
     border: 1px dashed var(--line);
@@ -655,7 +769,9 @@ button {
     .grid-system,
     .detail-layout,
     .resource-grid,
-    .two-col {
+    .two-col,
+    .management-grid,
+    .form-grid {
         grid-template-columns: 1fr;
     }
 }

@@ -85,6 +85,44 @@
                             </div>
                         </div>
                     </section>
+
+                    <section class="panel" style="grid-column: 1 / -1;">
+                        <div class="panel-head">
+                            <div class="panel-title">Camera Management</div>
+                            <div class="panel-value" id="camera-registry-meta">Future camera onboarding without code edits</div>
+                        </div>
+                        <div class="panel-body">
+                            <div class="management-grid">
+                                <div class="management-list">
+                                    <div class="section-label">Registry</div>
+                                    <div class="record-list" id="camera-registry-list"></div>
+                                </div>
+                                <div class="management-form">
+                                    <div class="section-label">Camera Setup</div>
+                                    <div class="form-grid">
+                                        <label><span>Camera ID</span><input id="camera-form-id" type="text" placeholder="main_production"></label>
+                                        <label><span>Label</span><input id="camera-form-label" type="text" placeholder="Main Production"></label>
+                                        <label><span>Zone</span><input id="camera-form-zone" type="text" placeholder="main_production_zone"></label>
+                                        <label><span>Role</span><input id="camera-form-role" type="text" placeholder="main_production"></label>
+                                        <label><span>Main RTSP URL</span><input id="camera-form-main-stream" type="text" placeholder="rtsp://..."></label>
+                                        <label><span>Sub RTSP URL</span><input id="camera-form-sub-stream" type="text" placeholder="rtsp://..."></label>
+                                        <label><span>Username</span><input id="camera-form-username" type="text" placeholder="admin"></label>
+                                        <label><span>Password</span><input id="camera-form-password" type="password" placeholder="password"></label>
+                                        <label><span>Height (ft)</span><input id="camera-form-height" type="number" step="0.1" placeholder="12"></label>
+                                        <label class="checkbox-row"><span>Enabled</span><input id="camera-form-enabled" type="checkbox" checked></label>
+                                        <label class="full"><span>Notes</span><textarea id="camera-form-notes" rows="3" placeholder="Camera location, direction, or setup note"></textarea></label>
+                                    </div>
+                                    <div class="action-row">
+                                        <button class="action-btn" id="camera-form-new" type="button">New</button>
+                                        <button class="action-btn accent" id="camera-form-test" type="button">Test Connection</button>
+                                        <button class="action-btn accent" id="camera-form-save" type="button">Save Camera</button>
+                                    </div>
+                                    <div class="message-box" id="camera-form-status">Use this panel for future cameras. Current RTSP cameras stay unchanged until you edit and save here.</div>
+                                    <div class="camera-test-preview" id="camera-test-preview"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
                 </div>
             </main>
         </div>

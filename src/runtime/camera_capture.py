@@ -1,6 +1,8 @@
 import threading
 import time
-from typing import Optional, Tuple
+from pathlib import Path
+from typing import Optional, Sequence, Tuple
+from urllib.parse import urlparse
 
 import cv2
 import numpy as np
@@ -13,6 +15,8 @@ class ThreadedCamera:
         self,
         camera_id: str,
         video_path: str,
+        video_playlist: Optional[Sequence[str]] = None,
+        video_start_offset_seconds: float = 0.0,
         width: Optional[int] = None,
         height: Optional[int] = None,
         fps: Optional[int] = None,
@@ -22,6 +26,11 @@ class ThreadedCamera:
     ):
         self.id = camera_id
         self.video_path = video_path
+        self.video_playlist = [str(path) for path in (video_playlist or []) if str(path).strip()]
+        if not self.video_playlist and video_path:
+            self.video_playlist = [str(video_path)]
+        self._source_index = 0
+        self._start_offset_seconds = max(0.0, float(video_start_offset_seconds or 0.0))
         self.width = width
         self.height = height
         self.fps = fps
@@ -68,13 +77,35 @@ class ThreadedCamera:
                 "last_error": self._last_error,
                 "has_frame": self._frame is not None,
                 "seconds_since_frame": round(time.time() - self._read_ts, 2) if self._read_ts else None,
+                "source": self._current_source(),
+                "playlist_index": self._source_index if len(self.video_playlist) > 1 else None,
+                "playlist_size": len(self.video_playlist) if len(self.video_playlist) > 1 else None,
             }
+
+    def _current_source(self) -> str:
+        if self.video_playlist:
+            return self.video_playlist[self._source_index % len(self.video_playlist)]
+        return self.video_path
+
+    def _is_file_source(self, source: str) -> bool:
+        parsed = urlparse(str(source))
+        if parsed.scheme and parsed.scheme.lower() not in ("file",):
+            return False
+        return Path(str(source)).suffix.lower() in {".mp4", ".avi", ".mkv", ".mov", ".m4v"}
+
+    def _advance_playlist(self) -> bool:
+        if len(self.video_playlist) <= 1:
+            return False
+        self._source_index = (self._source_index + 1) % len(self.video_playlist)
+        self._open_capture()
+        return True
 
     def _open_capture(self) -> None:
         self._last_open_attempt_ts = time.time()
         if self._cap is not None:
             self._cap.release()
 
+        self.video_path = self._current_source()
         self._cap = cv2.VideoCapture(self.video_path, cv2.CAP_FFMPEG)
         self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         if self.width:
@@ -83,6 +114,8 @@ class ThreadedCamera:
             self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         if self.fps:
             self._cap.set(cv2.CAP_PROP_FPS, self.fps)
+        if self._source_index == 0 and self._start_offset_seconds:
+            self._cap.set(cv2.CAP_PROP_POS_MSEC, self._start_offset_seconds * 1000.0)
         self._err_count = 0
         self._reconnects += 1
 
@@ -105,6 +138,10 @@ class ThreadedCamera:
 
             ret, frame = self._cap.read()
             if not ret or frame is None:
+                if self._is_file_source(self.video_path) and self._advance_playlist():
+                    self._last_error = "playlist_advanced"
+                    time.sleep(0.05)
+                    continue
                 self._err_count += 1
                 self._last_error = "read_failed"
                 if self._err_count >= self.reconnect_after:
@@ -127,3 +164,5 @@ class ThreadedCamera:
                 self._frames_read += 1
                 self._last_error = ""
             self._err_count = 0
+            if self._is_file_source(self.video_path) and self.fps:
+                time.sleep(max(0.001, 1.0 / float(self.fps)))

@@ -9,10 +9,12 @@ import threading
 import argparse
 import concurrent.futures
 import numpy as np
+from pathlib import Path
 from datetime import datetime
 from http.server import SimpleHTTPRequestHandler
 from socketserver import ThreadingTCPServer
 from collections import deque
+from urllib.parse import urlparse
 from ultralytics import YOLO
 from src.runtime.camera_capture import ThreadedCamera
 from src.runtime.performance import PerformanceMonitor
@@ -39,6 +41,78 @@ def load_config(config_path="config/settings.yaml"):
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
+
+def parse_rtsp_credentials(url):
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme.lower() != "rtsp":
+            return "", ""
+        return parsed.username or "", parsed.password or ""
+    except Exception:
+        return "", ""
+
+
+def normalize_camera_entry(cam):
+    stream_profiles = cam.get("stream_profiles", {}) or {}
+    video_path = cam.get("video_path", "")
+    video_playlist = cam.get("video_playlist") or []
+    main_stream = stream_profiles.get("main_stream") or video_path
+    sub_stream = stream_profiles.get("sub_stream") or ""
+    username, password = parse_rtsp_credentials(main_stream or video_path)
+    return {
+        "id": str(cam.get("id", "")).strip(),
+        "label": cam.get("label") or cam.get("id", ""),
+        "zone": cam.get("zone", ""),
+        "role": cam.get("role") or cam.get("id", ""),
+        "enabled": bool(cam.get("enabled", True)),
+        "video_path": video_path,
+        "video_playlist": video_playlist,
+        "video_start_offset_seconds": float(cam.get("video_start_offset_seconds", 0.0) or 0.0),
+        "replay": bool(cam.get("replay", False)),
+        "stream_profiles": {
+            "main_stream": main_stream,
+            "sub_stream": sub_stream,
+        },
+        "username": cam.get("username", username),
+        "password": cam.get("password", password),
+        "position": cam.get("position", [0, 0]),
+        "height_ft": cam.get("height_ft"),
+        "notes": cam.get("notes", ""),
+        "calibration_points": cam.get("calibration_points", {"camera_points": [], "map_points": []}),
+    }
+
+
+def ensure_camera_registry(config, registry_path):
+    registry_path = Path(registry_path)
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    if registry_path.exists():
+        return
+    cameras = [normalize_camera_entry(cam) for cam in config.get("cameras", [])]
+    payload = {
+        "version": 1,
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "cameras": cameras,
+    }
+    registry_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def load_camera_registry(config, registry_path):
+    registry_path = Path(registry_path)
+    ensure_camera_registry(config, registry_path)
+    payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    cameras = [normalize_camera_entry(cam) for cam in payload.get("cameras", [])]
+    return payload, cameras
+
+
+def write_camera_registry(registry_path, cameras):
+    payload = {
+        "version": 1,
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "cameras": [normalize_camera_entry(cam) for cam in cameras],
+    }
+    Path(registry_path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return payload
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Run Factory AI real-time tracking")
     parser.add_argument("--config", default="config/settings.yaml", help="Path to settings YAML")
@@ -47,6 +121,7 @@ def parse_args():
     parser.add_argument("--target-fps", type=float, default=None, help="Main processing loop FPS cap")
     parser.add_argument("--batch-size", type=int, default=None, help="Max camera frames per YOLO batch")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto", help="Inference device")
+    parser.add_argument("--camera-registry", default=None, help="Override camera registry JSON file")
     return parser.parse_args()
 
 def get_runtime_config(config, args):
@@ -77,9 +152,12 @@ def get_runtime_config(config, args):
         "stale_camera_after_seconds": float(runtime.get("stale_camera_after_seconds", 3.0)),
         "marker_confirmations_required": max(1, int(runtime.get("marker_confirmations_required", 2))),
         "marker_stale_after_seconds": float(runtime.get("marker_stale_after_seconds", 8.0)),
+        "marker_hidden_grace_seconds": float(runtime.get("marker_hidden_grace_seconds", 12.0)),
+        "marker_hidden_match_radius_px": float(runtime.get("marker_hidden_match_radius_px", 180.0)),
         "person_box_margin": float(runtime.get("person_box_margin", 0.15)),
         "min_marker_area": float(runtime.get("min_marker_area", 80.0)),
         "employee_records_file": runtime.get("employee_records_file", "logs/employee_records.json"),
+        "camera_registry_file": args.camera_registry or runtime.get("camera_registry_file", "data/cameras.json"),
     }
 
 def select_device(requested_device):
@@ -107,6 +185,20 @@ def resolve_camera_source(cam, profile_name):
     if profile_name in stream_profiles:
         return stream_profiles[profile_name]
     return cam.get("video_path")
+
+
+def camera_runtime_signature(cam, profile_name):
+    return {
+        "id": cam.get("id"),
+        "enabled": bool(cam.get("enabled", True)),
+        "source": resolve_camera_source(cam, profile_name),
+        "video_playlist": cam.get("video_playlist") or [],
+        "video_start_offset_seconds": float(cam.get("video_start_offset_seconds", 0.0) or 0.0),
+        "fps": cam.get("fps"),
+        "position": cam.get("position"),
+        "height_ft": cam.get("height_ft"),
+        "stream_profiles": cam.get("stream_profiles", {}),
+    }
 
 def parse_resolution(resolution):
     if not resolution:
@@ -149,6 +241,133 @@ def scale_person_boxes(results, scale):
         boxes.append({"bbox": (x1, y1, x2, y2), "confidence": float(conf)})
     return boxes
 
+def polygon_area(points):
+    pts = np.array(points, dtype=np.float32)
+    if len(pts) < 3:
+        return 0.0
+    x = pts[:, 0]
+    y = pts[:, 1]
+    return float(abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))) / 2.0)
+
+def bbox_from_points(points):
+    pts = np.array(points, dtype=np.float32)
+    if len(pts) == 0:
+        return None
+    min_x, min_y = pts.min(axis=0)
+    max_x, max_y = pts.max(axis=0)
+    return float(min_x), float(min_y), float(max_x), float(max_y)
+
+def load_floor_map_model(path="data/factory_map/rev03_manual_points.yaml"):
+    model_path = Path(path)
+    if not model_path.exists():
+        return {}
+    with model_path.open("r", encoding="utf-8") as f:
+        model = yaml.safe_load(f) or {}
+
+    point_lookup = {name: tuple(value) for name, value in (model.get("points") or {}).items()}
+    zones = {}
+    camera_zone = {}
+    for zone in model.get("zones") or []:
+        zone_points = [point_lookup[name] for name in zone.get("points", []) if name in point_lookup]
+        metrics = zone.get("metrics", {}) or {}
+        area_px2 = float(metrics.get("area_px2") or polygon_area(zone_points))
+        area_sqft = float(metrics.get("area_sqft") or 0.0)
+        ft_per_map_px = (area_sqft / area_px2) ** 0.5 if area_px2 > 0 and area_sqft > 0 else None
+        zone_info = {
+            "id": zone.get("id"),
+            "points": zone_points,
+            "bbox": bbox_from_points(zone_points),
+            "ft_per_map_px": ft_per_map_px,
+            "area_px2": area_px2,
+            "area_sqft": area_sqft,
+        }
+        zones[zone.get("id")] = zone_info
+        for camera_id in zone.get("cameras") or []:
+            camera_zone[camera_id] = zone_info
+
+    coverage = {}
+    for item in model.get("camera_coverage_estimates") or []:
+        visible = item.get("visible_polygon") or []
+        coverage[item.get("id")] = {
+            "visible_polygon": visible,
+            "bbox": bbox_from_points(visible),
+        }
+
+    return {
+        "zones": zones,
+        "camera_zone": camera_zone,
+        "coverage": coverage,
+    }
+
+def build_distance_calibrations(cameras, floor_model):
+    calibrations = {}
+    for cam in cameras:
+        cam_id = cam.get("id")
+        points = cam.get("calibration_points") or {}
+        camera_points = points.get("camera_points") or []
+        map_points = points.get("map_points") or []
+        zone = floor_model.get("camera_zone", {}).get(cam_id)
+        coverage = floor_model.get("coverage", {}).get(cam_id)
+        ft_per_map_px = zone.get("ft_per_map_px") if zone else None
+
+        homography = None
+        if len(camera_points) >= 4 and len(camera_points) == len(map_points):
+            src = np.array(camera_points, dtype=np.float32)
+            dst = np.array(map_points, dtype=np.float32)
+            homography, _ = cv2.findHomography(src, dst, cv2.RANSAC, 5.0)
+
+        target_bbox = None
+        method = "legacy_video_pixels"
+        if homography is not None and ft_per_map_px:
+            method = "homography_to_approved_map_scale"
+        elif coverage and coverage.get("bbox") and ft_per_map_px:
+            target_bbox = coverage["bbox"]
+            method = "coverage_bbox_to_approved_map_scale"
+        elif zone and zone.get("bbox") and ft_per_map_px:
+            target_bbox = zone["bbox"]
+            method = "zone_bbox_to_approved_map_scale"
+
+        calibrations[cam_id] = {
+            "homography": homography,
+            "target_bbox": target_bbox,
+            "ft_per_map_px": ft_per_map_px,
+            "method": method,
+            "zone_id": zone.get("id") if zone else None,
+        }
+    return calibrations
+
+def frame_point_to_map(point, frame_shape, calibration):
+    if not calibration:
+        return None
+    point = np.array(point, dtype=np.float32)
+    homography = calibration.get("homography")
+    if homography is not None:
+        src = point.reshape(1, 1, 2)
+        return cv2.perspectiveTransform(src, homography).reshape(2)
+
+    bbox = calibration.get("target_bbox")
+    if not bbox:
+        return None
+    height, width = frame_shape[:2]
+    if width <= 1 or height <= 1:
+        return None
+    min_x, min_y, max_x, max_y = bbox
+    nx = float(np.clip(point[0] / width, 0.0, 1.0))
+    ny = float(np.clip(point[1] / height, 0.0, 1.0))
+    return np.array([
+        min_x + nx * (max_x - min_x),
+        min_y + ny * (max_y - min_y),
+    ], dtype=np.float32)
+
+def distance_feet_between_points(prev_point, next_point, calibration, legacy_scale):
+    if prev_point is not None and next_point is not None and calibration and calibration.get("ft_per_map_px"):
+        d_map_px = float(np.linalg.norm(np.array(next_point) - np.array(prev_point)))
+        return d_map_px * float(calibration["ft_per_map_px"]), calibration.get("method", "map_scale")
+    if prev_point is None or next_point is None:
+        return 0.0, "not_enough_points"
+    d_pixels = float(np.linalg.norm(np.array(next_point) - np.array(prev_point)))
+    return (d_pixels / legacy_scale) * 3.28084, "legacy_video_pixels"
+
 def expanded_contains(box, point, margin_ratio):
     x1, y1, x2, y2 = box
     px, py = point
@@ -172,6 +391,31 @@ def find_person_for_marker(marker_center, person_boxes, margin_ratio):
         key=lambda person: abs(((person["bbox"][0] + person["bbox"][2]) / 2) - px)
         + abs(((person["bbox"][1] + person["bbox"][3]) / 2) - py),
     )
+
+def person_floor_point(person):
+    x1, y1, x2, y2 = person["bbox"]
+    return np.array([(x1 + x2) / 2.0, y2], dtype=np.float32)
+
+def find_continuation_person(worker_state, person_boxes, used_box_ids, max_radius_px):
+    if not person_boxes:
+        return None
+    last_points = worker_state.get("path") or []
+    if not last_points:
+        return None
+    last_pos = np.array(last_points[-1], dtype=np.float32)
+    candidates = []
+    for idx, person in enumerate(person_boxes):
+        if idx in used_box_ids:
+            continue
+        floor_pos = person_floor_point(person)
+        distance_px = float(np.linalg.norm(floor_pos - last_pos))
+        if distance_px <= max_radius_px:
+            candidates.append((distance_px, idx, person))
+    if not candidates:
+        return None
+    _, idx, person = min(candidates, key=lambda item: item[0])
+    used_box_ids.add(idx)
+    return person
 
 def account_worker_time(worker_state, now_ts, stale_after_seconds):
     last_account_ts = worker_state.get("last_account_ts", now_ts)
@@ -211,6 +455,7 @@ def build_employee_record(marker_id, worker_state, now_ts):
         "total_distance_ft": float(round(worker_state["dist"], 2)),
         "last_seen_age": round(now_ts - worker_state.get("last_seen_ts", now_ts), 2),
         "person_conf": round(worker_state.get("person_conf", 0.0), 3),
+        "distance_method": worker_state.get("distance_method", "unknown"),
         "camera_times_sec": {k: round(v, 2) for k, v in worker_state.get("camera_times", {}).items()},
         "status_times_sec": {k: round(v, 2) for k, v in worker_state.get("status_times", {}).items()},
         "path_view": worker_state.get("path_view", f"/outputs/recordings/{marker_id}.mp4"),
@@ -282,27 +527,153 @@ def get_break_info():
         
     return None
 
-def start_server(port=8000):
+def start_server(registry_path, registry_lock, port=8000):
     class QuietHandler(SimpleHTTPRequestHandler):
-        def log_message(self, format, *args): return
+        def log_message(self, format, *args):
+            return
+
         def end_headers(self):
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             super().end_headers()
+
+        def do_OPTIONS(self):
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.end_headers()
+
+        def _read_json(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length) if length else b"{}"
+            return json.loads(raw.decode("utf-8"))
+
+        def _send_json(self, payload, status=200):
+            body = json.dumps(payload, indent=2).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path.startswith("/api/cameras"):
+                with registry_lock:
+                    payload = json.loads(Path(registry_path).read_text(encoding="utf-8"))
+                return self._send_json(payload)
+            return super().do_GET()
+
+        def do_POST(self):
+            if self.path == "/api/cameras":
+                payload = self._read_json()
+                cameras = payload.get("cameras", [])
+                if not isinstance(cameras, list):
+                    return self._send_json({"error": "cameras must be a list"}, status=400)
+                normalized = [normalize_camera_entry(cam) for cam in cameras if str(cam.get("id", "")).strip()]
+                with registry_lock:
+                    saved = write_camera_registry(registry_path, normalized)
+                return self._send_json(saved)
+
+            if self.path == "/api/cameras/test":
+                payload = self._read_json()
+                camera = normalize_camera_entry(payload.get("camera", {}))
+                source = resolve_camera_source(camera, payload.get("profile", "main_stream"))
+                if not source:
+                    return self._send_json({"ok": False, "error": "missing camera source"}, status=400)
+                cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                ok, frame = cap.read()
+                cap.release()
+                if not ok or frame is None:
+                    return self._send_json({"ok": False, "error": "unable to read frame"}, status=200)
+                snapshot_name = f"test_{camera['id'] or 'camera'}.jpg"
+                snapshot_path = Path("outputs/live") / snapshot_name
+                snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+                write_jpeg_atomic(str(snapshot_path), frame, 70)
+                return self._send_json({
+                    "ok": True,
+                    "snapshot": f"/outputs/live/{snapshot_name}",
+                    "width": int(frame.shape[1]),
+                    "height": int(frame.shape[0]),
+                })
+
+            return self._send_json({"error": "not found"}, status=404)
+
     class ReusableThreadingTCPServer(ThreadingTCPServer):
         allow_reuse_address = True
         daemon_threads = True
+
     while port < 8010:
         try:
             with ReusableThreadingTCPServer(("", port), QuietHandler) as httpd:
-                with open("logs/current_port.txt", "w") as f: f.write(str(port))
+                with open("logs/current_port.txt", "w") as f:
+                    f.write(str(port))
                 httpd.serve_forever()
-        except OSError: port += 1
+        except OSError:
+            port += 1
+
+
+def build_threaded_camera(cam, runtime):
+    profile = runtime["camera_profile_settings"]
+    cap_width, cap_height = parse_resolution(profile.get("resolution"))
+    source = resolve_camera_source(cam, runtime["camera_profile"])
+    if not source:
+        return None
+    camera = ThreadedCamera(
+        camera_id=cam["id"],
+        video_path=source,
+        video_playlist=cam.get("video_playlist") or None,
+        video_start_offset_seconds=cam.get("video_start_offset_seconds", 0.0),
+        width=cap_width,
+        height=cap_height,
+        fps=profile.get("fps"),
+        reconnect_after=runtime["reconnect_after"],
+        reconnect_interval_seconds=runtime["reconnect_interval_seconds"],
+        stale_after_seconds=runtime["stale_camera_after_seconds"],
+    )
+    camera.start()
+    return camera
+
+
+def sync_runtime_cameras(active_cameras, active_specs, ordered_ids, config, runtime, registry_path, registry_lock):
+    with registry_lock:
+        _, registry_cameras = load_camera_registry(config, registry_path)
+
+    desired_cameras = [cam for cam in registry_cameras if cam.get("enabled", True)]
+    desired_by_id = {cam["id"]: cam for cam in desired_cameras}
+    desired_order = [cam["id"] for cam in desired_cameras]
+
+    for cam_id in list(active_cameras.keys()):
+        if cam_id not in desired_by_id:
+            active_cameras[cam_id].stop()
+            active_cameras.pop(cam_id, None)
+            active_specs.pop(cam_id, None)
+
+    for cam_id, cam in desired_by_id.items():
+        signature = camera_runtime_signature(cam, runtime["camera_profile"])
+        if cam_id not in active_cameras:
+            camera = build_threaded_camera(cam, runtime)
+            if camera is not None:
+                active_cameras[cam_id] = camera
+                active_specs[cam_id] = signature
+            continue
+        if active_specs.get(cam_id) != signature:
+            active_cameras[cam_id].stop()
+            camera = build_threaded_camera(cam, runtime)
+            if camera is not None:
+                active_cameras[cam_id] = camera
+                active_specs[cam_id] = signature
+
+    ordered_ids[:] = [cam_id for cam_id in desired_order if cam_id in active_cameras]
 
 def main():
     args = parse_args()
     config = load_config(args.config)
     runtime = get_runtime_config(config, args)
+    registry_path = runtime["camera_registry_file"]
+    registry_lock = threading.Lock()
+    ensure_camera_registry(config, registry_path)
     device = select_device(args.device)
     acceleration = get_acceleration_info(args.device, device)
     decoder_log_handle = None
@@ -331,28 +702,10 @@ def main():
     if runtime["redirect_decoder_logs"]:
         print(f"Decoder warnings redirected to {runtime['decoder_log_file']}")
 
-    profile = runtime["camera_profile_settings"]
-    cap_width, cap_height = parse_resolution(profile.get("resolution"))
-    cameras = []
-    for cam in [c for c in config["cameras"] if c["enabled"]]:
-        source = resolve_camera_source(cam, runtime["camera_profile"])
-        if not source:
-            continue
-        camera = ThreadedCamera(
-            camera_id=cam["id"],
-            video_path=source,
-            width=cap_width,
-            height=cap_height,
-            fps=profile.get("fps"),
-            reconnect_after=runtime["reconnect_after"],
-            reconnect_interval_seconds=runtime["reconnect_interval_seconds"],
-            stale_after_seconds=runtime["stale_camera_after_seconds"],
-        )
-        camera.start()
-        cameras.append(camera)
-
-    if not cameras:
-        return
+    active_cameras = {}
+    active_specs = {}
+    camera_order = []
+    sync_runtime_cameras(active_cameras, active_specs, camera_order, config, runtime, registry_path, registry_lock)
 
     history = {}
     marker_confirmations = {}
@@ -366,11 +719,20 @@ def main():
     os.makedirs("outputs/recordings", exist_ok=True)
 
     aruco_dict = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, config["aruco"]["dictionary_type"]))
-    threading.Thread(target=start_server, daemon=True).start()
+    threading.Thread(target=start_server, args=(registry_path, registry_lock), daemon=True).start()
     time.sleep(1)
 
     session_start = time.time()
     scale = config["mapping"].get("scale_factor", 50.0)
+    floor_model = load_floor_map_model()
+    with registry_lock:
+        _, registry_cameras = load_camera_registry(config, registry_path)
+    distance_calibrations = build_distance_calibrations(registry_cameras, floor_model)
+    distance_methods = {
+        cam_id: info.get("method", "legacy_video_pixels")
+        for cam_id, info in distance_calibrations.items()
+    }
+    print(f"Distance methods: {distance_methods}")
     monitor = PerformanceMonitor(runtime["monitor_interval_seconds"])
     loop_interval = 1.0 / max(float(runtime["target_fps"]), 1.0)
     confidence = config["detection"].get("confidence_threshold", 0.25)
@@ -379,6 +741,7 @@ def main():
     aruco_pool = concurrent.futures.ThreadPoolExecutor(max_workers=runtime["aruco_workers"])
     image_writer_pool = concurrent.futures.ThreadPoolExecutor(max_workers=runtime["image_writer_workers"])
     path_video_recorder = VideoRecorder(runtime["path_video_fps"], runtime["path_video_codec"])
+    last_camera_sync_ts = 0.0
 
     try:
         while True:
@@ -386,6 +749,13 @@ def main():
             loop_started = time.time()
             try:
                 now_ts = time.time()
+                if now_ts - last_camera_sync_ts >= 3.0:
+                    sync_runtime_cameras(active_cameras, active_specs, camera_order, config, runtime, registry_path, registry_lock)
+                    last_camera_sync_ts = now_ts
+                cameras = [active_cameras[cam_id] for cam_id in camera_order if cam_id in active_cameras]
+                if not cameras:
+                    time.sleep(0.5)
+                    continue
                 break_msg = get_break_info()
                 frame_data = {
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -407,8 +777,11 @@ def main():
                         "target_fps": runtime["target_fps"],
                         "path_video_every_n_frames": runtime["path_video_every_n_frames"],
                         "path_video_fps": runtime["path_video_fps"],
+                        "distance_methods": distance_methods,
                         "marker_confirmations_required": runtime["marker_confirmations_required"],
                         "marker_stale_after_seconds": runtime["marker_stale_after_seconds"],
+                        "marker_hidden_grace_seconds": runtime["marker_hidden_grace_seconds"],
+                        "marker_hidden_match_radius_px": runtime["marker_hidden_match_radius_px"],
                     },
                     "acceleration": acceleration,
                     "lunch_mode": break_msg is not None,
@@ -467,6 +840,8 @@ def main():
                         cam_id = item["id"]
                         render_frame = item["render_frame"]
                         person_boxes = scale_person_boxes(results, item["yolo_scale"])
+                        used_person_box_ids = set()
+                        marker_seen_workers = set()
 
                         person_count = len(results.boxes)
                         total_detected_people += person_count
@@ -498,6 +873,10 @@ def main():
                                 if matched_person is None:
                                     marker_confirmations.pop((cam_id, marker_id), None)
                                     continue
+                                try:
+                                    used_person_box_ids.add(person_boxes.index(matched_person))
+                                except ValueError:
+                                    pass
 
                                 confirmation_key = (cam_id, marker_id)
                                 marker_confirmations[confirmation_key] = marker_confirmations.get(confirmation_key, 0) + 1
@@ -507,17 +886,26 @@ def main():
                                 ):
                                     continue
 
+                                x1f, y1f, x2f, y2f = matched_person["bbox"]
+                                floor_pos = np.array([(x1f + x2f) / 2.0, y2f], dtype=np.float32)
+                                calibration = distance_calibrations.get(cam_id, {})
+                                map_pos = frame_point_to_map(floor_pos, render_frame.shape, calibration)
+
                                 if marker_id not in history:
                                     history[marker_id] = {
                                         "name": emp["name"],
                                         "dept": emp["dept"],
                                         "pos_buffer": deque(maxlen=5),
-                                        "path": [raw_pos.tolist()],
-                                        "camera_paths": {cam_id: [raw_pos.tolist()]},
+                                        "path": [floor_pos.tolist()],
+                                        "camera_paths": {cam_id: [floor_pos.tolist()]},
+                                        "map_pos_buffer": deque(maxlen=5),
+                                        "last_map_pos": map_pos.tolist() if map_pos is not None else None,
                                         "dist": 0.0,
+                                        "distance_method": calibration.get("method", "legacy_video_pixels"),
                                         "status": "WORKING",
                                         "last_move_ts": now_ts,
                                         "last_seen_ts": now_ts,
+                                        "last_marker_seen_ts": now_ts,
                                         "last_account_ts": now_ts,
                                         "person_conf": matched_person["confidence"],
                                         "camera_times": {},
@@ -527,38 +915,58 @@ def main():
                                     }
 
                                 worker_state = history[marker_id]
+                                marker_seen_workers.add(marker_id)
                                 if worker_state["cam_id"] != cam_id:
                                     # Keep total distance cumulative, but start a fresh visual path per camera.
                                     worker_state["cam_id"] = cam_id
                                     worker_state["pos_buffer"].clear()
                                     worker_state.setdefault("camera_paths", {})
-                                    worker_state["camera_paths"].setdefault(cam_id, [raw_pos.tolist()])
+                                    worker_state["camera_paths"].setdefault(cam_id, [floor_pos.tolist()])
                                     worker_state["path"] = worker_state["camera_paths"][cam_id]
+                                    worker_state["last_map_pos"] = map_pos.tolist() if map_pos is not None else None
+                                    worker_state.setdefault("map_pos_buffer", deque(maxlen=5)).clear()
                                     worker_state["last_move_ts"] = now_ts
                                     worker_state["last_seen_ts"] = now_ts
+                                    worker_state["last_marker_seen_ts"] = now_ts
                                     worker_state["person_conf"] = matched_person["confidence"]
                                     worker_state["status"] = "WORKING"
+                                    worker_state["distance_method"] = calibration.get("method", "legacy_video_pixels")
                                     worker_state["path_view"] = f"/outputs/recordings/{marker_id}_{cam_id}.mp4"
                                     continue
 
                                 worker_state["last_seen_ts"] = now_ts
+                                worker_state["last_marker_seen_ts"] = now_ts
                                 worker_state["person_conf"] = matched_person["confidence"]
                                 worker_state["path_view"] = f"/outputs/recordings/{marker_id}_{cam_id}.mp4"
-                                worker_state.setdefault("camera_paths", {}).setdefault(cam_id, worker_state.get("path", [raw_pos.tolist()]))
+                                worker_state.setdefault("camera_paths", {}).setdefault(cam_id, worker_state.get("path", [floor_pos.tolist()]))
                                 worker_state["path"] = worker_state["camera_paths"][cam_id]
-                                worker_state["pos_buffer"].append(raw_pos)
+                                worker_state["pos_buffer"].append(floor_pos)
                                 smooth_pos = np.mean(worker_state["pos_buffer"], axis=0)
                                 last_pt = np.array(worker_state["path"][-1])
                                 d_pixels = float(np.sqrt(np.sum((smooth_pos - last_pt) ** 2)))
+                                if map_pos is not None:
+                                    worker_state.setdefault("map_pos_buffer", deque(maxlen=5)).append(map_pos)
+                                    smooth_map_pos = np.mean(worker_state["map_pos_buffer"], axis=0)
+                                else:
+                                    smooth_map_pos = None
 
                                 if d_pixels > 8:
-                                    dist_meters = d_pixels / scale
-                                    dist_feet = dist_meters * 3.28084
+                                    distance_prev = worker_state.get("last_map_pos") if smooth_map_pos is not None else last_pt
+                                    distance_next = smooth_map_pos if smooth_map_pos is not None else smooth_pos
+                                    dist_feet, distance_method = distance_feet_between_points(
+                                        distance_prev,
+                                        distance_next,
+                                        calibration,
+                                        scale,
+                                    )
                                     if dist_feet > 20 and len(worker_state["path"]) > 1:
                                         worker_state["pos_buffer"].clear()
+                                        worker_state.setdefault("map_pos_buffer", deque(maxlen=5)).clear()
                                         continue
 
                                     worker_state["dist"] += dist_feet
+                                    worker_state["last_map_pos"] = smooth_map_pos.tolist() if smooth_map_pos is not None else None
+                                    worker_state["distance_method"] = distance_method
                                     worker_state["path"].append(smooth_pos.tolist())
                                     worker_state["camera_paths"][cam_id] = worker_state["path"]
                                     worker_state["status"] = "WALKING"
@@ -580,6 +988,73 @@ def main():
                                     (255, 255, 255),
                                     1,
                                 )
+
+                        for marker_id, worker_state in history.items():
+                            if worker_state.get("cam_id") != cam_id or marker_id in marker_seen_workers:
+                                continue
+                            if now_ts - worker_state.get("last_marker_seen_ts", 0.0) > runtime["marker_hidden_grace_seconds"]:
+                                continue
+
+                            matched_person = find_continuation_person(
+                                worker_state,
+                                person_boxes,
+                                used_person_box_ids,
+                                runtime["marker_hidden_match_radius_px"],
+                            )
+                            if matched_person is None:
+                                continue
+
+                            floor_pos = person_floor_point(matched_person)
+                            calibration = distance_calibrations.get(cam_id, {})
+                            map_pos = frame_point_to_map(floor_pos, render_frame.shape, calibration)
+
+                            worker_state["last_seen_ts"] = now_ts
+                            worker_state["person_conf"] = min(worker_state.get("person_conf", 0.0), matched_person["confidence"])
+                            worker_state["path_view"] = f"/outputs/recordings/{marker_id}_{cam_id}.mp4"
+                            worker_state.setdefault("camera_paths", {}).setdefault(cam_id, worker_state.get("path", [floor_pos.tolist()]))
+                            worker_state["path"] = worker_state["camera_paths"][cam_id]
+                            worker_state["pos_buffer"].append(floor_pos)
+                            smooth_pos = np.mean(worker_state["pos_buffer"], axis=0)
+                            last_pt = np.array(worker_state["path"][-1])
+                            d_pixels = float(np.linalg.norm(smooth_pos - last_pt))
+
+                            if map_pos is not None:
+                                worker_state.setdefault("map_pos_buffer", deque(maxlen=5)).append(map_pos)
+                                smooth_map_pos = np.mean(worker_state["map_pos_buffer"], axis=0)
+                            else:
+                                smooth_map_pos = None
+
+                            if d_pixels > 8:
+                                distance_prev = worker_state.get("last_map_pos") if smooth_map_pos is not None else last_pt
+                                distance_next = smooth_map_pos if smooth_map_pos is not None else smooth_pos
+                                dist_feet, distance_method = distance_feet_between_points(
+                                    distance_prev,
+                                    distance_next,
+                                    calibration,
+                                    scale,
+                                )
+                                if dist_feet <= 20 or len(worker_state["path"]) <= 1:
+                                    worker_state["dist"] += dist_feet
+                                    worker_state["last_map_pos"] = smooth_map_pos.tolist() if smooth_map_pos is not None else None
+                                    worker_state["distance_method"] = distance_method
+                                    worker_state["path"].append(smooth_pos.tolist())
+                                    worker_state["camera_paths"][cam_id] = worker_state["path"]
+                                    worker_state["status"] = "WALKING"
+                                    worker_state["last_move_ts"] = now_ts
+                            elif now_ts - worker_state["last_move_ts"] > 5:
+                                worker_state["status"] = "WORKING"
+
+                            x1, y1, x2, y2 = [int(v) for v in matched_person["bbox"]]
+                            cv2.rectangle(render_frame, (x1, y1), (x2, y2), (0, 214, 255), 2)
+                            cv2.putText(
+                                render_frame,
+                                f"{worker_state['name']} | marker hidden",
+                                (x1, max(20, y1 - 10)),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.55,
+                                (255, 255, 255),
+                                2,
+                            )
 
                         live_path = f"outputs/live/{cam_id}.jpg"
                         save_interval = 1.0 / runtime["dashboard_fps"]
@@ -675,7 +1150,7 @@ def main():
         path_video_recorder.close()
         aruco_pool.shutdown(wait=False, cancel_futures=True)
         image_writer_pool.shutdown(wait=False, cancel_futures=True)
-        for cam in cameras:
+        for cam in active_cameras.values():
             cam.stop()
         if decoder_log_handle is not None:
             decoder_log_handle.close()
