@@ -5,10 +5,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 import yaml
+import fitz
 
 
 ROOT = Path(__file__).resolve().parents[2]
 IMAGE_PATH = ROOT / "docs" / "rev03_page1.png"
+PDF_PATH = ROOT / "docs" / "rev03.pdf"
 YAML_PATH = ROOT / "data" / "factory_map" / "rev03_manual_points.yaml"
 OUTPUT_DIR = ROOT / "outputs" / "maps"
 LAYOUT_DIR = OUTPUT_DIR / "layouts"
@@ -20,6 +22,27 @@ DETAIL_OVERLAY_OUTPUT = LAYOUT_DIR / "rev03_manual_layout_detail_overlay.png"
 
 def load_config() -> dict:
     return yaml.safe_load(YAML_PATH.read_text(encoding="utf-8"))
+
+
+def load_base_image():
+    image = cv2.imread(str(IMAGE_PATH))
+    if image is not None:
+        return image
+
+    if not PDF_PATH.exists():
+        raise FileNotFoundError(f"Could not read {IMAGE_PATH} and missing {PDF_PATH}")
+
+    doc = fitz.open(PDF_PATH)
+    page = doc.load_page(0)
+    pix = page.get_pixmap(dpi=200)
+    image = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+    if pix.n == 4:
+        image = cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
+    elif pix.n == 3:
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    IMAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(IMAGE_PATH), image)
+    return image
 
 
 def snap_axis_aligned(p1: tuple[int, int], p2: tuple[int, int]) -> tuple[tuple[int, int], tuple[int, int], str]:
@@ -205,9 +228,7 @@ def make_detail_crop(canvas, pts: dict[str, tuple[int, int]]):
 
 def main():
     config = load_config()
-    image = cv2.imread(str(IMAGE_PATH))
-    if image is None:
-        raise FileNotFoundError(f"Could not read {IMAGE_PATH}")
+    image = load_base_image()
 
     pts = {name: tuple(values) for name, values in config["points"].items()}
     canvas = image.copy()
