@@ -456,11 +456,19 @@ button {
     border-radius: 8px;
     background: rgba(255, 255, 255, 0.55);
     padding: 10px;
+    min-width: 0;
 }
 
 .mini-card strong {
     display: block;
     font-size: 14px;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.mini-card.wide {
+    grid-column: span 2;
 }
 
 .mini-card span {

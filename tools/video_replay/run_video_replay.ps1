@@ -1,10 +1,10 @@
 param(
     [ValidateSet("auto", "cpu", "cuda")]
     [string]$Device = "cuda",
-    [double]$ReplaySpeed = 20,
+    [double]$ReplaySpeed = 1,
     [int]$InferenceWidth = 1280,
-    [double]$TargetFps = 30,
-    [int]$BatchSize = 6
+    [double]$TargetFps = 15,
+    [int]$BatchSize = 4
 )
 
 $ErrorActionPreference = "Stop"

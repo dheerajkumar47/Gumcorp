@@ -15,6 +15,10 @@ runtime:
   aruco_max_width: 1920
   aruco_every_n_frames: 3
   aruco_workers: 3
+  aruco_crop_first_enabled: true
+  aruco_crop_zoom: 4.0
+  aruco_crop_margin_ratio: 0.08
+  aruco_full_frame_fallback: true
   batch_size: 4
   dashboard_image_width: 960
   dashboard_fps: 10
@@ -30,7 +34,19 @@ runtime:
   stale_camera_after_seconds: 3.0
   marker_confirmations_required: 2
   marker_stale_after_seconds: 8.0
+  marker_hidden_grace_seconds: 30.0
+  marker_hidden_match_radius_px: 280.0
+  marker_hidden_max_seconds: 30.0
+  marker_hidden_min_iou: 0.02
+  tracker_iou_threshold: 0.12
+  tracker_center_radius_px: 180.0
+  tracker_max_age_seconds: 6.0
+  reid_match_threshold: 0.72
+  reid_max_gap_seconds: 45.0
   person_box_margin: 0.15
+  activity_upper_motion_threshold: 0.026
+  activity_gesture_motion_threshold: 0.018
+  activity_idle_after_seconds: 20.0
   min_marker_area: 80
   employee_records_file: "logs/employee_records.json"
   jpeg_quality_live: 65
@@ -163,7 +179,7 @@ cameras:
 # Detection Settings (YOLOv8)
 detection:
   model_path: "models/yolov8n.pt"
-  confidence_threshold: 0.5
+  confidence_threshold: 0.35
   iou_threshold: 0.45
   classes: [0]
 

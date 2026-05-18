@@ -1,50 +1,8 @@
 {
   "version": 1,
-  "updated_at": "2026-05-12 12:40:28",
+  "updated_at": "2026-05-18 15:36:28",
   "mode": "video_replay",
   "cameras": [
-    {
-      "id": "production_outside",
-      "label": "Production Outside",
-      "zone": "",
-      "role": "production_outside",
-      "enabled": true,
-      "replay": true,
-      "video_path": "data/videos/D18_S20260429075814_E20260429085645.mp4",
-      "video_playlist": [
-        "data/videos/D18_S20260429075814_E20260429085645.mp4",
-        "data/videos/D18_S20260429085645_E20260429095515.mp4",
-        "data/videos/D18_S20260429095515_E20260429105344.mp4",
-        "data/videos/D18_S20260429105344_E20260429115200.mp4",
-        "data/videos/D18_S20260429115200_E20260429125024.mp4",
-        "data/videos/D18_S20260429125024_E20260429134858.mp4",
-        "data/videos/D18_S20260429134858_E20260429144746.mp4",
-        "data/videos/D18_S20260429144746_E20260429152628.mp4",
-        "data/videos/D18_S20260429152628_E20260429154245.mp4",
-        "data/videos/D18_S20260429154245_E20260429161849.mp4",
-        "data/videos/D18_S20260429161849_E20260429163509.mp4",
-        "data/videos/D18_S20260429163509_E20260429171113.mp4",
-        "data/videos/D18_S20260429171113_E20260429172733.mp4",
-        "data/videos/D18_S20260429172733_E20260429180337.mp4",
-        "data/videos/D18_S20260429180337_E20260429181954.mp4",
-        "data/videos/D18_S20260429181954_E0.mp4"
-      ],
-      "video_start_offset_seconds": 106.0,
-      "stream_profiles": {
-        "main_stream": "data/videos/D18_S20260429075814_E20260429085645.mp4",
-        "sub_stream": "data/videos/D18_S20260429075814_E20260429085645.mp4"
-      },
-      "position": [
-        2966,
-        1660
-      ],
-      "height_ft": null,
-      "notes": "Replay from NVR channel D18",
-      "calibration_points": {
-        "camera_points": [],
-        "map_points": []
-      }
-    },
     {
       "id": "palletline",
       "label": "Pallet Line",
@@ -68,7 +26,8 @@
         "data/videos/D30_S20260429172339_E20260429175943.mp4",
         "data/videos/D30_S20260429175943_E20260429181546.mp4",
         "data/videos/D30_S20260429181546_E20260429185150.mp4",
-        "data/videos/D30_S20260429185150_E20260429190800.mp4"
+        "data/videos/D30_S20260429185150_E20260429190800.mp4",
+        "data/videos/D30_S20260429190800_E20260429194404.mp4"
       ],
       "video_start_offset_seconds": 0.0,
       "stream_profiles": {
@@ -109,7 +68,7 @@
         "data/videos/D31_S20260429173122_E20260429174742.mp4",
         "data/videos/D31_S20260429174742_E20260429182346.mp4",
         "data/videos/D31_S20260429182346_E20260429184006.mp4",
-        "data/videos/D31_S20260429184006_E20260429191610.mp4"
+        "data/videos/D31_S20260429191610_E20260429193230.mp4"
       ],
       "video_start_offset_seconds": 0.0,
       "stream_profiles": {
@@ -122,135 +81,6 @@
       ],
       "height_ft": null,
       "notes": "Replay from NVR channel D31",
-      "calibration_points": {
-        "camera_points": [],
-        "map_points": []
-      }
-    },
-    {
-      "id": "mixer1",
-      "label": "Mixer 1",
-      "zone": "",
-      "role": "mixer1",
-      "enabled": true,
-      "replay": true,
-      "video_path": "data/videos/D32_S20260429084713_E20260429093841.mp4",
-      "video_playlist": [
-        "data/videos/D32_S20260429084713_E20260429093841.mp4",
-        "data/videos/D32_S20260429093841_E20260429103703.mp4",
-        "data/videos/D32_S20260429103703_E20260429113156.mp4",
-        "data/videos/D32_S20260429113156_E20260429122704.mp4",
-        "data/videos/D32_S20260429122704_E20260429132522.mp4",
-        "data/videos/D32_S20260429132522_E20260429142353.mp4",
-        "data/videos/D32_S20260429142353_E20260429151145.mp4",
-        "data/videos/D32_S20260429151145_E20260429151946.mp4",
-        "data/videos/D32_S20260429151946_E20260429155550.mp4",
-        "data/videos/D32_S20260429155550_E20260429160824.mp4",
-        "data/videos/D32_S20260429160824_E20260429164428.mp4",
-        "data/videos/D32_S20260429164428_E20260429170045.mp4",
-        "data/videos/D32_S20260429170045_E20260429173649.mp4",
-        "data/videos/D32_S20260429173649_E20260429174852.mp4",
-        "data/videos/D32_S20260429174852_E20260429182456.mp4",
-        "data/videos/D32_S20260429182456_E20260429183947.mp4",
-        "data/videos/D32_S20260429183947_E20260429191551.mp4"
-      ],
-      "video_start_offset_seconds": 0.0,
-      "stream_profiles": {
-        "main_stream": "data/videos/D32_S20260429084713_E20260429093841.mp4",
-        "sub_stream": "data/videos/D32_S20260429084713_E20260429093841.mp4"
-      },
-      "position": [
-        3617,
-        1140
-      ],
-      "height_ft": null,
-      "notes": "Replay from NVR channel D32",
-      "calibration_points": {
-        "camera_points": [],
-        "map_points": []
-      }
-    },
-    {
-      "id": "mixer2",
-      "label": "Mixer 2",
-      "zone": "",
-      "role": "mixer2",
-      "enabled": true,
-      "replay": true,
-      "video_path": "data/videos/D33_S20260429081239_E20260429091020.mp4",
-      "video_playlist": [
-        "data/videos/D33_S20260429081239_E20260429091020.mp4",
-        "data/videos/D33_S20260429091020_E20260429100513.mp4",
-        "data/videos/D33_S20260429100513_E20260429110115.mp4",
-        "data/videos/D33_S20260429110115_E20260429115736.mp4",
-        "data/videos/D33_S20260429115736_E20260429125344.mp4",
-        "data/videos/D33_S20260429125344_E20260429135138.mp4",
-        "data/videos/D33_S20260429135138_E20260429144954.mp4",
-        "data/videos/D33_S20260429144954_E20260429152813.mp4",
-        "data/videos/D33_S20260429152813_E20260429154310.mp4",
-        "data/videos/D33_S20260429154310_E20260429161914.mp4",
-        "data/videos/D33_S20260429161914_E20260429163351.mp4",
-        "data/videos/D33_S20260429163351_E20260429170955.mp4",
-        "data/videos/D33_S20260429170955_E20260429172512.mp4",
-        "data/videos/D33_S20260429172512_E20260429180115.mp4",
-        "data/videos/D33_S20260429180115_E20260429181516.mp4",
-        "data/videos/D33_S20260429181516_E20260429185120.mp4",
-        "data/videos/D33_S20260429185120_E20260429190453.mp4"
-      ],
-      "video_start_offset_seconds": 0.0,
-      "stream_profiles": {
-        "main_stream": "data/videos/D33_S20260429081239_E20260429091020.mp4",
-        "sub_stream": "data/videos/D33_S20260429081239_E20260429091020.mp4"
-      },
-      "position": [
-        3620,
-        1169
-      ],
-      "height_ft": null,
-      "notes": "Replay from NVR channel D33",
-      "calibration_points": {
-        "camera_points": [],
-        "map_points": []
-      }
-    },
-    {
-      "id": "mixer3",
-      "label": "Mixer 3",
-      "zone": "",
-      "role": "mixer3",
-      "enabled": true,
-      "replay": true,
-      "video_path": "data/videos/D34_S20260429082440_E20260429092314.mp4",
-      "video_playlist": [
-        "data/videos/D34_S20260429082440_E20260429092314.mp4",
-        "data/videos/D34_S20260429092314_E20260429102147.mp4",
-        "data/videos/D34_S20260429102147_E20260429112018.mp4",
-        "data/videos/D34_S20260429112018_E20260429121851.mp4",
-        "data/videos/D34_S20260429121851_E20260429131724.mp4",
-        "data/videos/D34_S20260429131724_E20260429141558.mp4",
-        "data/videos/D34_S20260429141558_E20260429150910.mp4",
-        "data/videos/D34_S20260429150910_E20260429151317.mp4",
-        "data/videos/D34_S20260429151317_E20260429155006.mp4",
-        "data/videos/D34_S20260429155006_E20260429160630.mp4",
-        "data/videos/D34_S20260429160630_E20260429164234.mp4",
-        "data/videos/D34_S20260429164234_E20260429165854.mp4",
-        "data/videos/D34_S20260429165854_E20260429173458.mp4",
-        "data/videos/D34_S20260429173458_E20260429175119.mp4",
-        "data/videos/D34_S20260429175119_E20260429182722.mp4",
-        "data/videos/D34_S20260429182722_E20260429184343.mp4",
-        "data/videos/D34_S20260429184343_E20260429191946.mp4"
-      ],
-      "video_start_offset_seconds": 0.0,
-      "stream_profiles": {
-        "main_stream": "data/videos/D34_S20260429082440_E20260429092314.mp4",
-        "sub_stream": "data/videos/D34_S20260429082440_E20260429092314.mp4"
-      },
-      "position": [
-        3617,
-        1657
-      ],
-      "height_ft": null,
-      "notes": "Replay from NVR channel D34",
       "calibration_points": {
         "camera_points": [],
         "map_points": []

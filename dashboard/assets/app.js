@@ -58,6 +58,7 @@ const DashboardApp = (() => {
     function workerTone(status) {
         if (status === "WORKING") return "good";
         if (status === "WALKING") return "warn";
+        if (status === "IDLE_SITTING" || status === "IDLE_STANDING") return "bad";
         return "bad";
     }
 
@@ -384,7 +385,7 @@ const DashboardApp = (() => {
                             <div class="employee-top">
                                 <div>
                                     <div class="employee-name">${escapeHtml(worker.name)}</div>
-                                    <div class="meta-sub">${escapeHtml(worker.dept || "Production")} - ${escapeHtml(worker.current_camera || "unknown")}</div>
+                                    <div class="meta-sub">${escapeHtml(worker.dept || "Production")} - ${escapeHtml(worker.current_camera || "unknown")} - ${escapeHtml(worker.activity_reason || "activity pending")}</div>
                                 </div>
                                 <span class="pill ${workerTone(worker.status)}">${escapeHtml(worker.status || "ACTIVE")}</span>
                             </div>
@@ -464,7 +465,7 @@ const DashboardApp = (() => {
                         <div class="employee-top">
                             <div>
                                 <div class="employee-name">${escapeHtml(item.name)}</div>
-                                <div class="meta-sub">${escapeHtml(item.dept || "Production")} - ${escapeHtml(item.current_camera || "unknown")}</div>
+                                <div class="meta-sub">${escapeHtml(item.dept || "Production")} - ${escapeHtml(item.current_camera || "unknown")} - ${escapeHtml(item.activity_reason || "activity pending")}</div>
                             </div>
                             <span class="pill ${workerTone(item.status)}">${escapeHtml(item.status || "ACTIVE")}</span>
                         </div>
@@ -502,6 +503,8 @@ const DashboardApp = (() => {
             setText("employee-detail-confidence", "0.00");
             setText("employee-detail-lastseen", "0s");
             setText("employee-detail-zone", "Pending");
+            setText("employee-detail-posture", "Pending");
+            setText("employee-detail-activity", "Pending");
             setHtml("employee-detail-cameras", rowsFromMap({}));
             setHtml("employee-detail-statuses", rowsFromMap({}));
             setText("employee-recording-path", "No recording");
@@ -528,7 +531,9 @@ const DashboardApp = (() => {
         setText("employee-detail-distance", `${Number(worker.total_distance_ft || 0).toFixed(2)} ft`);
         setText("employee-detail-confidence", Number(worker.person_conf || 0).toFixed(2));
         setText("employee-detail-lastseen", fmtSec(worker.last_seen_age));
-        setText("employee-detail-zone", worker.zone || "Pending");
+        setText("employee-detail-zone", worker.zone || worker.zone_id || "Unknown Zone");
+        setText("employee-detail-posture", worker.posture || "unknown");
+        setText("employee-detail-activity", worker.activity_reason || "activity pending");
         setHtml("employee-detail-cameras", rowsFromMap(worker.camera_times_sec));
         setHtml("employee-detail-statuses", rowsFromMap(worker.status_times_sec));
         const currentCamera = (state.data.cameras || []).find((camera) => camera.id === worker.current_camera);

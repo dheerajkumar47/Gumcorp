@@ -24,6 +24,12 @@ try:
 except Exception:
     torch = None
 
+os.environ.setdefault("MPLCONFIGDIR", str((Path("logs") / "matplotlib").resolve()))
+try:
+    import supervision as sv
+except Exception:
+    sv = None
+
 # Keep RTSP stable and reduce FFmpeg console noise during multi-camera runs.
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
     "rtsp_transport;tcp|"
@@ -139,6 +145,10 @@ def get_runtime_config(config, args):
         "aruco_max_width": max(160, int(runtime.get("aruco_max_width", 1920))),
         "aruco_every_n_frames": max(1, int(runtime.get("aruco_every_n_frames", 3))),
         "aruco_workers": max(1, int(runtime.get("aruco_workers", 2))),
+        "aruco_crop_first_enabled": bool(runtime.get("aruco_crop_first_enabled", True)),
+        "aruco_crop_zoom": max(1.0, float(runtime.get("aruco_crop_zoom", 4.0))),
+        "aruco_crop_margin_ratio": max(0.0, float(runtime.get("aruco_crop_margin_ratio", 0.08))),
+        "aruco_full_frame_fallback": bool(runtime.get("aruco_full_frame_fallback", False)),
         "dashboard_image_width": max(320, int(runtime.get("dashboard_image_width", 960))),
         "dashboard_fps": max(1.0, float(runtime.get("dashboard_fps", 5.0))),
         "image_writer_workers": max(1, int(runtime.get("image_writer_workers", 2))),
@@ -156,7 +166,17 @@ def get_runtime_config(config, args):
         "marker_stale_after_seconds": float(runtime.get("marker_stale_after_seconds", 8.0)),
         "marker_hidden_grace_seconds": float(runtime.get("marker_hidden_grace_seconds", 12.0)),
         "marker_hidden_match_radius_px": float(runtime.get("marker_hidden_match_radius_px", 180.0)),
+        "marker_hidden_max_seconds": float(runtime.get("marker_hidden_max_seconds", 4.0)),
+        "marker_hidden_min_iou": float(runtime.get("marker_hidden_min_iou", 0.08)),
+        "tracker_iou_threshold": float(runtime.get("tracker_iou_threshold", 0.12)),
+        "tracker_center_radius_px": float(runtime.get("tracker_center_radius_px", 180.0)),
+        "tracker_max_age_seconds": float(runtime.get("tracker_max_age_seconds", 6.0)),
+        "reid_match_threshold": float(runtime.get("reid_match_threshold", 0.72)),
+        "reid_max_gap_seconds": float(runtime.get("reid_max_gap_seconds", 45.0)),
         "person_box_margin": float(runtime.get("person_box_margin", 0.15)),
+        "activity_upper_motion_threshold": float(runtime.get("activity_upper_motion_threshold", 0.026)),
+        "activity_gesture_motion_threshold": float(runtime.get("activity_gesture_motion_threshold", 0.018)),
+        "activity_idle_after_seconds": float(runtime.get("activity_idle_after_seconds", 20.0)),
         "min_marker_area": float(runtime.get("min_marker_area", 80.0)),
         "employee_records_file": runtime.get("employee_records_file", "logs/employee_records.json"),
         "camera_registry_file": args.camera_registry or runtime.get("camera_registry_file", "data/cameras.json"),
@@ -232,6 +252,99 @@ def detect_aruco_markers(aruco_dict, frame, max_width):
         corners = tuple(corner * aruco_scale for corner in corners)
     return corners, ids
 
+def detect_aruco_in_person_crops(aruco_dict, frame, person_boxes, zoom_scale, margin_ratio, min_marker_area):
+    if not person_boxes:
+        return None, None, {}
+    height, width = frame.shape[:2]
+    params = cv2.aruco.DetectorParameters()
+    params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+    detector = cv2.aruco.ArucoDetector(aruco_dict, params)
+    candidates = []
+
+    for person_index, person in enumerate(person_boxes):
+        x1, y1, x2, y2 = person["bbox"]
+        box_w = max(1.0, x2 - x1)
+        box_h = max(1.0, y2 - y1)
+        pad_x = box_w * margin_ratio
+        pad_y = box_h * margin_ratio
+        cx1 = max(0, int(round(x1 - pad_x)))
+        cy1 = max(0, int(round(y1 - pad_y)))
+        cx2 = min(width, int(round(x2 + pad_x)))
+        cy2 = min(height, int(round(y2 + pad_y)))
+        if cx2 - cx1 < 20 or cy2 - cy1 < 30:
+            continue
+
+        crop = frame[cy1:cy2, cx1:cx2]
+        if crop.size == 0:
+            continue
+        zoom = cv2.resize(crop, None, fx=zoom_scale, fy=zoom_scale, interpolation=cv2.INTER_CUBIC)
+        gray = cv2.cvtColor(zoom, cv2.COLOR_BGR2GRAY)
+        crop_corners, crop_ids, _ = detector.detectMarkers(gray)
+        if crop_ids is None:
+            equalized = cv2.equalizeHist(gray)
+            crop_corners, crop_ids, _ = detector.detectMarkers(equalized)
+        if crop_ids is None:
+            continue
+
+        for marker_id, marker_corners in zip(crop_ids.flatten(), crop_corners):
+            pts_zoom = marker_corners[0].astype(np.float32)
+            area = float(cv2.contourArea(pts_zoom)) / (zoom_scale * zoom_scale)
+            if area < min_marker_area:
+                continue
+            pts_full = (pts_zoom / zoom_scale) + np.array([cx1, cy1], dtype=np.float32)
+            marker_center = pts_full.mean(axis=0)
+            inside_score = 1.0 if expanded_contains(person["bbox"], marker_center, 0.0) else 0.0
+            candidates.append({
+                "marker_id": int(marker_id),
+                "corners": pts_full,
+                "person": person,
+                "person_index": person_index,
+                "score": (inside_score * 100000.0) + area - bbox_area(person["bbox"]) * 0.0001,
+            })
+
+    if not candidates:
+        return None, None, {}
+
+    best_by_marker = {}
+    for item in candidates:
+        marker_id = item["marker_id"]
+        previous = best_by_marker.get(marker_id)
+        if previous is None or item["score"] > previous["score"]:
+            best_by_marker[marker_id] = item
+
+    ordered = sorted(best_by_marker.values(), key=lambda item: item["score"], reverse=True)
+    corners = tuple(np.array([item["corners"]], dtype=np.float32) for item in ordered)
+    ids = np.array([[item["marker_id"]] for item in ordered], dtype=np.int32)
+    marker_person_matches = {idx: item["person"] for idx, item in enumerate(ordered)}
+    return corners, ids, marker_person_matches
+
+def merge_aruco_detections(primary_corners, primary_ids, primary_matches, fallback_corners, fallback_ids):
+    merged_corners = []
+    merged_ids = []
+    merged_matches = {}
+    seen_ids = set()
+
+    if primary_ids is not None and primary_corners is not None:
+        for idx, marker_id in enumerate(primary_ids.flatten()):
+            marker_id = int(marker_id)
+            merged_matches[len(merged_ids)] = primary_matches.get(idx)
+            merged_corners.append(primary_corners[idx])
+            merged_ids.append(marker_id)
+            seen_ids.add(marker_id)
+
+    if fallback_ids is not None and fallback_corners is not None:
+        for idx, marker_id in enumerate(fallback_ids.flatten()):
+            marker_id = int(marker_id)
+            if marker_id in seen_ids:
+                continue
+            merged_corners.append(fallback_corners[idx])
+            merged_ids.append(marker_id)
+            seen_ids.add(marker_id)
+
+    if not merged_ids:
+        return None, None, {}
+    return tuple(merged_corners), np.array([[marker_id] for marker_id in merged_ids], dtype=np.int32), merged_matches
+
 def scale_person_boxes(results, scale):
     boxes = []
     if results.boxes is None:
@@ -259,6 +372,11 @@ def bbox_from_points(points):
     max_x, max_y = pts.max(axis=0)
     return float(min_x), float(min_y), float(max_x), float(max_y)
 
+def point_in_polygon(point, polygon):
+    if point is None or not polygon:
+        return False
+    return cv2.pointPolygonTest(np.array(polygon, dtype=np.float32), tuple(map(float, point)), False) >= 0
+
 def load_floor_map_model(path="data/factory_map/rev03_manual_points.yaml"):
     model_path = Path(path)
     if not model_path.exists():
@@ -277,6 +395,7 @@ def load_floor_map_model(path="data/factory_map/rev03_manual_points.yaml"):
         ft_per_map_px = (area_sqft / area_px2) ** 0.5 if area_px2 > 0 and area_sqft > 0 else None
         zone_info = {
             "id": zone.get("id"),
+            "label": zone.get("label") or zone.get("id"),
             "points": zone_points,
             "bbox": bbox_from_points(zone_points),
             "ft_per_map_px": ft_per_map_px,
@@ -300,6 +419,12 @@ def load_floor_map_model(path="data/factory_map/rev03_manual_points.yaml"):
         "camera_zone": camera_zone,
         "coverage": coverage,
     }
+
+def resolve_worker_zone(map_pos, cam_id, floor_model):
+    for zone in floor_model.get("zones", {}).values():
+        if point_in_polygon(map_pos, zone.get("points")):
+            return zone
+    return floor_model.get("camera_zone", {}).get(cam_id)
 
 def build_distance_calibrations(cameras, floor_model):
     calibrations = {}
@@ -405,6 +530,282 @@ def bbox_iou(box_a, box_b):
         return 0.0
     return inter / union
 
+def bbox_aspect(box):
+    x1, y1, x2, y2 = box
+    return max(1.0, float(y2 - y1)) / max(1.0, float(x2 - x1))
+
+def person_appearance_feature(frame, bbox):
+    if frame is None:
+        return None
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = [int(round(v)) for v in bbox]
+    x1 = max(0, min(w - 1, x1))
+    x2 = max(0, min(w, x2))
+    y1 = max(0, min(h - 1, y1))
+    y2 = max(0, min(h, y2))
+    if x2 - x1 < 12 or y2 - y1 < 18:
+        return None
+    crop = frame[y1:y2, x1:x2]
+    if crop.size == 0:
+        return None
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    hist = cv2.calcHist([hsv], [0, 1], None, [16, 16], [0, 180, 0, 256])
+    feature = cv2.normalize(hist, None).flatten().astype(np.float32)
+    norm = float(np.linalg.norm(feature))
+    if norm <= 1e-6:
+        return None
+    return feature / norm
+
+def feature_similarity(feature_a, feature_b):
+    if feature_a is None or feature_b is None:
+        return 0.0
+    return float(np.dot(feature_a, feature_b))
+
+class ByteTrackStyleTracker:
+    """Camera-local tracking plus lightweight appearance ReID.
+
+    This is intentionally small and dependency-free. It gives us the behavior
+    we need now: stable local person IDs, ArUco-to-track binding, and a first
+    appearance-based bridge between cameras. A deep OSNet model can replace the
+    feature extractor later without changing the main loop contract.
+    """
+
+    def __init__(self, runtime):
+        self.iou_threshold = float(runtime["tracker_iou_threshold"])
+        self.center_radius_px = float(runtime["tracker_center_radius_px"])
+        self.max_age_seconds = float(runtime["tracker_max_age_seconds"])
+        self.reid_threshold = float(runtime["reid_match_threshold"])
+        self.reid_max_gap_seconds = float(runtime["reid_max_gap_seconds"])
+        self.next_track_id = 1
+        self.next_global_id = 1
+        self.byte_trackers = {}
+        self.tracks_by_camera = {}
+        self.global_profiles = {}
+
+    def _new_track_id(self):
+        track_id = self.next_track_id
+        self.next_track_id += 1
+        return track_id
+
+    def _new_global_id(self):
+        global_id = f"person_{self.next_global_id:04d}"
+        self.next_global_id += 1
+        return global_id
+
+    def _cleanup(self, cam_id, now_ts):
+        tracks = self.tracks_by_camera.setdefault(cam_id, {})
+        stale = [
+            track_id for track_id, track in tracks.items()
+            if now_ts - track.get("last_seen_ts", now_ts) > self.max_age_seconds
+        ]
+        for track_id in stale:
+            tracks.pop(track_id, None)
+
+    def _byte_tracker(self, cam_id):
+        if sv is None or not hasattr(sv, "ByteTrack"):
+            return None
+        tracker = self.byte_trackers.get(cam_id)
+        if tracker is None:
+            tracker = sv.ByteTrack(
+                track_activation_threshold=0.2,
+                lost_track_buffer=max(15, int(self.max_age_seconds * 15)),
+                minimum_matching_threshold=0.72,
+                frame_rate=15,
+                minimum_consecutive_frames=1,
+            )
+            self.byte_trackers[cam_id] = tracker
+        return tracker
+
+    def _assign_global_id(self, cam_id, feature, now_ts):
+        if feature is None:
+            return self._new_global_id()
+        best_id = None
+        best_score = 0.0
+        for global_id, profile in self.global_profiles.items():
+            if profile.get("employee_marker_id") is not None:
+                continue
+            if profile.get("last_camera") == cam_id:
+                continue
+            if now_ts - profile.get("last_seen_ts", 0.0) > self.reid_max_gap_seconds:
+                continue
+            score = feature_similarity(feature, profile.get("feature"))
+            if score > best_score:
+                best_id = global_id
+                best_score = score
+        if best_id and best_score >= self.reid_threshold:
+            return best_id
+        return self._new_global_id()
+
+    def _update_global_profile(self, global_id, cam_id, feature, now_ts, employee_marker_id=None):
+        profile = self.global_profiles.get(global_id, {})
+        old_feature = profile.get("feature")
+        if feature is not None and old_feature is not None:
+            feature = (old_feature * 0.7) + (feature * 0.3)
+            norm = float(np.linalg.norm(feature))
+            if norm > 1e-6:
+                feature = feature / norm
+        elif feature is None:
+            feature = old_feature
+        if employee_marker_id is None:
+            employee_marker_id = profile.get("employee_marker_id")
+        profile.update({
+            "feature": feature,
+            "last_camera": cam_id,
+            "last_seen_ts": now_ts,
+            "employee_marker_id": employee_marker_id,
+        })
+        self.global_profiles[global_id] = profile
+
+    def update(self, cam_id, detections, frame, now_ts):
+        self._cleanup(cam_id, now_ts)
+        tracks = self.tracks_by_camera.setdefault(cam_id, {})
+        for det in detections:
+            det["feature"] = person_appearance_feature(frame, det["bbox"])
+
+        byte_tracker = self._byte_tracker(cam_id)
+        if byte_tracker is not None and detections:
+            xyxy = np.array([det["bbox"] for det in detections], dtype=np.float32)
+            confidence = np.array([det.get("confidence", 0.0) for det in detections], dtype=np.float32)
+            class_id = np.zeros(len(detections), dtype=int)
+            sv_detections = sv.Detections(xyxy=xyxy, confidence=confidence, class_id=class_id)
+            tracked = byte_tracker.update_with_detections(sv_detections)
+            matched_det_indices = set()
+            for box, tracker_id in zip(tracked.xyxy, tracked.tracker_id):
+                if tracker_id is None:
+                    continue
+                best_idx = None
+                best_iou = 0.0
+                for idx, det in enumerate(detections):
+                    if idx in matched_det_indices:
+                        continue
+                    iou = bbox_iou(tuple(box.tolist()), det["bbox"])
+                    if iou > best_iou:
+                        best_idx = idx
+                        best_iou = iou
+                if best_idx is None or best_iou <= 0.05:
+                    continue
+                matched_det_indices.add(best_idx)
+                det = detections[best_idx]
+                track_id = f"bt_{int(tracker_id)}"
+                track = tracks.get(track_id)
+                if track is None:
+                    global_id = self._assign_global_id(cam_id, det.get("feature"), now_ts)
+                    track = {
+                        "bbox": det["bbox"],
+                        "last_seen_ts": now_ts,
+                        "hits": 0,
+                        "confidence": det.get("confidence", 0.0),
+                        "feature": det.get("feature"),
+                        "global_id": global_id,
+                        "employee_marker_id": None,
+                    }
+                    tracks[track_id] = track
+                track["bbox"] = det["bbox"]
+                track["last_seen_ts"] = now_ts
+                track["hits"] = track.get("hits", 0) + 1
+                track["confidence"] = det.get("confidence", 0.0)
+                if det.get("feature") is not None:
+                    track["feature"] = det["feature"]
+                self._update_global_profile(
+                    track["global_id"],
+                    cam_id,
+                    det.get("feature"),
+                    now_ts,
+                    track.get("employee_marker_id"),
+                )
+                det["track_id"] = track_id
+                det["global_id"] = track["global_id"]
+                det["employee_marker_id"] = track.get("employee_marker_id")
+
+        candidates = []
+        for track_id, track in tracks.items():
+            track_center = bbox_center(track["bbox"])
+            for det_idx, det in enumerate(detections):
+                if det.get("track_id") is not None:
+                    continue
+                iou = bbox_iou(track["bbox"], det["bbox"])
+                center_dist = float(np.linalg.norm(track_center - bbox_center(det["bbox"])))
+                if iou >= self.iou_threshold or center_dist <= self.center_radius_px:
+                    score = (iou * 100.0) - (center_dist * 0.05) + (det.get("confidence", 0.0) * 5.0)
+                    candidates.append((score, track_id, det_idx))
+        candidates.sort(reverse=True, key=lambda item: item[0])
+
+        assigned_tracks = set()
+        assigned_dets = set()
+        for _, track_id, det_idx in candidates:
+            if track_id in assigned_tracks or det_idx in assigned_dets:
+                continue
+            track = tracks.get(track_id)
+            if track is None:
+                continue
+            det = detections[det_idx]
+            assigned_tracks.add(track_id)
+            assigned_dets.add(det_idx)
+            track["bbox"] = det["bbox"]
+            track["last_seen_ts"] = now_ts
+            track["hits"] = track.get("hits", 0) + 1
+            track["confidence"] = det.get("confidence", 0.0)
+            if det.get("feature") is not None:
+                track["feature"] = det["feature"]
+            self._update_global_profile(
+                track["global_id"],
+                cam_id,
+                det.get("feature"),
+                now_ts,
+                track.get("employee_marker_id"),
+            )
+            det["track_id"] = track_id
+            det["global_id"] = track["global_id"]
+            det["employee_marker_id"] = track.get("employee_marker_id")
+
+        for det_idx, det in enumerate(detections):
+            if det_idx in assigned_dets or det.get("track_id") is not None:
+                continue
+            track_id = self._new_track_id()
+            global_id = self._assign_global_id(cam_id, det.get("feature"), now_ts)
+            tracks[track_id] = {
+                "bbox": det["bbox"],
+                "last_seen_ts": now_ts,
+                "hits": 1,
+                "confidence": det.get("confidence", 0.0),
+                "feature": det.get("feature"),
+                "global_id": global_id,
+                "employee_marker_id": None,
+            }
+            self._update_global_profile(global_id, cam_id, det.get("feature"), now_ts)
+            det["track_id"] = track_id
+            det["global_id"] = global_id
+            det["employee_marker_id"] = None
+
+        return detections
+
+    def bind_employee(self, cam_id, track_id, marker_id):
+        track = self.tracks_by_camera.get(cam_id, {}).get(track_id)
+        if not track:
+            return
+        old_global_id = track.get("global_id")
+        employee_global_id = f"emp_{int(marker_id)}"
+        track["employee_marker_id"] = int(marker_id)
+        track["global_id"] = employee_global_id
+        self._update_global_profile(
+            employee_global_id,
+            cam_id,
+            track.get("feature"),
+            track.get("last_seen_ts", time.time()),
+            int(marker_id),
+        )
+        if old_global_id and old_global_id != employee_global_id:
+            self.global_profiles.pop(old_global_id, None)
+
+    def find_employee_detection(self, cam_id, marker_id, detections, used_box_ids):
+        for idx, det in enumerate(detections):
+            if idx in used_box_ids:
+                continue
+            if det.get("employee_marker_id") == int(marker_id):
+                used_box_ids.add(idx)
+                return det
+        return None
+
 def find_person_for_marker(marker_center, person_boxes, margin_ratio):
     strict_containing = [
         person for person in person_boxes
@@ -430,7 +831,90 @@ def person_floor_point(person):
     x1, y1, x2, y2 = person["bbox"]
     return np.array([(x1 + x2) / 2.0, y2], dtype=np.float32)
 
-def find_continuation_person(worker_state, person_boxes, used_box_ids, max_radius_px):
+def person_posture(person):
+    x1, y1, x2, y2 = person["bbox"]
+    width = max(1.0, float(x2 - x1))
+    height = max(1.0, float(y2 - y1))
+    aspect = height / width
+    if aspect < 1.35:
+        return "sitting_or_bending"
+    if aspect < 1.7:
+        return "leaning_or_working"
+    return "standing"
+
+def upper_body_patch(frame, bbox):
+    if frame is None:
+        return None
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = [int(round(v)) for v in bbox]
+    x1 = max(0, min(w - 1, x1))
+    x2 = max(0, min(w, x2))
+    y1 = max(0, min(h - 1, y1))
+    y2 = max(0, min(h, y2))
+    if x2 - x1 < 8 or y2 - y1 < 8:
+        return None
+    upper_y2 = y1 + max(8, int((y2 - y1) * 0.58))
+    crop = frame[y1:upper_y2, x1:x2]
+    if crop.size == 0:
+        return None
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    gray = cv2.resize(gray, (64, 64), interpolation=cv2.INTER_AREA)
+    return cv2.GaussianBlur(gray, (5, 5), 0)
+
+def classify_worker_activity(worker_state, person, frame, d_pixels, now_ts, runtime):
+    patch = upper_body_patch(frame, person["bbox"])
+    motion_score = 0.0
+    previous_patch = worker_state.get("activity_patch")
+    if patch is not None and previous_patch is not None:
+        diff = cv2.absdiff(patch, previous_patch)
+        motion_score = float(np.mean(diff)) / 255.0
+    if patch is not None:
+        worker_state["activity_patch"] = patch
+
+    previous_ema = float(worker_state.get("activity_motion_ema", 0.0))
+    motion_ema = (previous_ema * 0.65) + (motion_score * 0.35)
+    worker_state["activity_motion_ema"] = motion_ema
+
+    moving = d_pixels > 8.0
+    posture = person_posture(person)
+    if moving:
+        worker_state["last_move_ts"] = now_ts
+
+    upper_threshold = runtime["activity_upper_motion_threshold"]
+    gesture_threshold = runtime["activity_gesture_motion_threshold"]
+    idle_after = runtime["activity_idle_after_seconds"]
+
+    if motion_ema >= upper_threshold:
+        status = "WORKING"
+        reason = "upper_body_or_hand_motion"
+        worker_state["last_work_motion_ts"] = now_ts
+    elif moving and motion_ema >= gesture_threshold:
+        status = "WORKING"
+        reason = "walking_with_gesture_or_material"
+        worker_state["last_work_motion_ts"] = now_ts
+    elif moving:
+        status = "WALKING"
+        reason = "walking_without_work_motion"
+    else:
+        last_active = max(
+            worker_state.get("last_work_motion_ts", now_ts),
+            worker_state.get("last_move_ts", now_ts),
+        )
+        if now_ts - last_active >= idle_after:
+            status = "IDLE_SITTING" if posture == "sitting_or_bending" else "IDLE_STANDING"
+            reason = "no_body_motion_after_idle_window"
+        else:
+            status = "WORKING"
+            reason = "stationary_work_grace"
+
+    worker_state["status"] = status
+    worker_state["activity_reason"] = reason
+    worker_state["posture"] = posture
+    worker_state["activity_motion_score"] = round(motion_score, 4)
+    worker_state["activity_motion_ema"] = round(motion_ema, 4)
+    return status
+
+def find_continuation_person(worker_state, person_boxes, used_box_ids, max_radius_px, min_iou):
     if not person_boxes:
         return None
     last_points = worker_state.get("path") or []
@@ -438,6 +922,8 @@ def find_continuation_person(worker_state, person_boxes, used_box_ids, max_radiu
         return None
     last_pos = np.array(last_points[-1], dtype=np.float32)
     last_bbox = worker_state.get("last_bbox")
+    last_center = bbox_center(last_bbox) if last_bbox else None
+    last_aspect = bbox_aspect(last_bbox) if last_bbox else None
     candidates = []
     for idx, person in enumerate(person_boxes):
         if idx in used_box_ids:
@@ -446,18 +932,60 @@ def find_continuation_person(worker_state, person_boxes, used_box_ids, max_radiu
         distance_px = float(np.linalg.norm(floor_pos - last_pos))
         if distance_px <= max_radius_px:
             iou = bbox_iou(last_bbox, person["bbox"]) if last_bbox else 0.0
+            center_distance = float(np.linalg.norm(bbox_center(person["bbox"]) - last_center)) if last_center is not None else distance_px
+            aspect_penalty = 0.0
+            if last_aspect:
+                aspect_penalty = abs(np.log(bbox_aspect(person["bbox"]) / last_aspect))
             area_penalty = 0.0
             if last_bbox:
                 prev_area = max(1.0, bbox_area(last_bbox))
                 next_area = max(1.0, bbox_area(person["bbox"]))
                 area_penalty = abs(np.log(next_area / prev_area))
-            score = distance_px - (iou * 120.0) + (area_penalty * 35.0)
+                if iou < min_iou and distance_px > max_radius_px * 0.75 and center_distance > max_radius_px * 0.75:
+                    continue
+                if area_penalty > 1.35:
+                    continue
+                if aspect_penalty > 1.1:
+                    continue
+            score = (distance_px * 0.55) + (center_distance * 0.35) - (iou * 160.0) + (area_penalty * 25.0) + (aspect_penalty * 20.0)
             candidates.append((score, distance_px, idx, person))
     if not candidates:
         return None
     _, _, idx, person = min(candidates, key=lambda item: item[0])
     used_box_ids.add(idx)
     return person
+
+def accept_path_step(worker_state, dist_feet, d_pixels, tracking_mode):
+    if len(worker_state.get("path", [])) <= 1:
+        return True
+    if dist_feet > 20:
+        return False
+    if tracking_mode != "aruco" and d_pixels > 220:
+        return False
+    return True
+
+def camera_time_scale(stream_status, runtime):
+    if stream_status and stream_status.get("replay_speed"):
+        return max(1.0, float(stream_status.get("replay_speed") or runtime.get("replay_speed", 1.0)))
+    return 1.0
+
+def likely_recent_tracked_person(person, worker_states, cam_id, now_ts, max_seconds, max_radius_px):
+    floor_pos = person_floor_point(person)
+    center = bbox_center(person["bbox"])
+    for state in worker_states:
+        if state.get("cam_id") != cam_id:
+            continue
+        if now_ts - state.get("last_marker_seen_ts", 0.0) > max_seconds:
+            continue
+        last_points = state.get("path") or []
+        last_bbox = state.get("last_bbox")
+        if not last_points or not last_bbox:
+            continue
+        floor_distance = float(np.linalg.norm(floor_pos - np.array(last_points[-1], dtype=np.float32)))
+        center_distance = float(np.linalg.norm(center - bbox_center(last_bbox)))
+        if floor_distance <= max_radius_px * 0.75 or center_distance <= max_radius_px * 0.65:
+            return True
+    return False
 
 def account_worker_time(worker_state, now_ts, stale_after_seconds):
     last_account_ts = worker_state.get("last_account_ts", now_ts)
@@ -494,11 +1022,18 @@ def build_employee_record(marker_id, worker_state, now_ts):
         "dept": worker_state["dept"],
         "status": worker_state["status"],
         "current_camera": worker_state.get("cam_id"),
+        "zone": worker_state.get("zone_label", "Unknown Zone"),
+        "zone_id": worker_state.get("zone_id", "unknown"),
         "total_distance_ft": float(round(worker_state["dist"], 2)),
+        "first_seen_ts": round(float(worker_state.get("first_seen_ts", now_ts)), 3),
+        "last_seen_ts": round(float(worker_state.get("last_seen_ts", now_ts)), 3),
         "last_seen_age": round(now_ts - worker_state.get("last_seen_ts", now_ts), 2),
         "person_conf": round(worker_state.get("person_conf", 0.0), 3),
         "distance_method": worker_state.get("distance_method", "unknown"),
         "tracking_mode": worker_state.get("tracking_mode", "unknown"),
+        "posture": worker_state.get("posture", "unknown"),
+        "activity_reason": worker_state.get("activity_reason", "unknown"),
+        "activity_motion": worker_state.get("activity_motion_ema", 0.0),
         "camera_times_sec": {k: round(v, 2) for k, v in worker_state.get("camera_times", {}).items()},
         "status_times_sec": {k: round(v, 2) for k, v in worker_state.get("status_times", {}).items()},
         "path_view": worker_state.get("path_view", recording_view_path(marker_id, worker_state["name"], worker_state.get("cam_id", "unknown"))),
@@ -526,6 +1061,41 @@ def write_jpeg_atomic(path, frame, quality):
     except OSError:
         pass
 
+def clear_startup_outputs(runtime):
+    Path("logs").mkdir(exist_ok=True)
+    Path("outputs/live").mkdir(parents=True, exist_ok=True)
+    Path("outputs/reports").mkdir(parents=True, exist_ok=True)
+
+    empty_timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    Path(runtime["employee_records_file"]).write_text(
+        json.dumps({"timestamp": empty_timestamp, "employees": []}, indent=2),
+        encoding="utf-8",
+    )
+    Path("logs/live_stats.json").write_text(
+        json.dumps(
+            {
+                "timestamp": empty_timestamp,
+                "uptime": 0,
+                "cameras": [],
+                "total_person_count": 0,
+                "stats": [],
+                "performance": {},
+                "runtime": {},
+                "acceleration": {},
+                "lunch_mode": False,
+                "break_message": "",
+                "startup_message": "Backend starting. Waiting for first processed frames.",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    for path in Path("outputs/live").glob("*.jpg"):
+        try:
+            path.unlink()
+        except OSError:
+            pass
 class VideoRecorder:
     def __init__(self, fps, codec):
         self.fps = fps
@@ -552,6 +1122,19 @@ class VideoRecorder:
         for writer_info in self._writers.values():
             writer_info["writer"].release()
         self._writers.clear()
+
+def export_employee_report_on_shutdown():
+    try:
+        from tools.reporting.export_employee_pdf import build_pdf, load_json, timestamped_report_path
+
+        records_payload = load_json(Path("logs/employee_records.json"))
+        live_payload = load_json(Path("logs/live_stats.json"))
+        if records_payload.get("employees") or records_payload.get("stats"):
+            output_path = timestamped_report_path("outputs/reports")
+            build_pdf(records_payload, live_payload, output_path)
+            print(f"Employee activity PDF saved to {output_path}")
+    except Exception as exc:
+        print(f"Employee activity PDF export skipped: {exc}")
 
 def redirect_decoder_stderr(log_file):
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
@@ -732,6 +1315,7 @@ def main():
     registry_path = runtime["camera_registry_file"]
     registry_lock = threading.Lock()
     ensure_camera_registry(config, registry_path)
+    clear_startup_outputs(runtime)
     device = select_device(args.device)
     acceleration = get_acceleration_info(args.device, device)
     decoder_log_handle = None
@@ -755,7 +1339,8 @@ def main():
     print(
         f"Runtime: device={device}, batch={runtime['batch_size']}, "
         f"inference_width={runtime['inference_width']}, aruco_every={runtime['aruco_every_n_frames']}, "
-        f"dashboard={runtime['dashboard_image_width']}px/{runtime['dashboard_fps']}fps"
+        f"dashboard={runtime['dashboard_image_width']}px/{runtime['dashboard_fps']}fps, "
+        f"tracker={'ByteTrack' if sv is not None and hasattr(sv, 'ByteTrack') else 'local'}+ReID"
     )
     if runtime["redirect_decoder_logs"]:
         print(f"Decoder warnings redirected to {runtime['decoder_log_file']}")
@@ -767,6 +1352,7 @@ def main():
 
     history = {}
     marker_confirmations = {}
+    pending_track_switches = {}
     last_render_frames = {}
     last_aruco_frame_index = {}
     last_dashboard_save_ts = {}
@@ -795,6 +1381,7 @@ def main():
     loop_interval = 1.0 / max(float(runtime["target_fps"]), 1.0)
     confidence = config["detection"].get("confidence_threshold", 0.25)
     classes = config["detection"].get("classes", [0])
+    person_tracker = ByteTrackStyleTracker(runtime)
 
     aruco_pool = concurrent.futures.ThreadPoolExecutor(max_workers=runtime["aruco_workers"])
     image_writer_pool = concurrent.futures.ThreadPoolExecutor(max_workers=runtime["image_writer_workers"])
@@ -828,6 +1415,8 @@ def main():
                         "inference_width": runtime["inference_width"],
                         "aruco_max_width": runtime["aruco_max_width"],
                         "aruco_every_n_frames": runtime["aruco_every_n_frames"],
+                        "aruco_crop_first_enabled": runtime["aruco_crop_first_enabled"],
+                        "aruco_crop_zoom": runtime["aruco_crop_zoom"],
                         "aruco_workers": runtime["aruco_workers"],
                         "dashboard_image_width": runtime["dashboard_image_width"],
                         "dashboard_fps": runtime["dashboard_fps"],
@@ -841,6 +1430,9 @@ def main():
                         "marker_stale_after_seconds": runtime["marker_stale_after_seconds"],
                         "marker_hidden_grace_seconds": runtime["marker_hidden_grace_seconds"],
                         "marker_hidden_match_radius_px": runtime["marker_hidden_match_radius_px"],
+                        "tracker_max_age_seconds": runtime["tracker_max_age_seconds"],
+                        "reid_match_threshold": runtime["reid_match_threshold"],
+                        "activity_idle_after_seconds": runtime["activity_idle_after_seconds"],
                     },
                     "acceleration": acceleration,
                     "lunch_mode": break_msg is not None,
@@ -861,26 +1453,33 @@ def main():
                     proc_frame = cv2.resize(frame, (proc_w, int(h * (proc_w / w))))
                     last_render_frames[cam.id] = render_frame
                     stream_status = cam.status()
+                    frame_index = stream_status.get("frames_read", 0)
                     item = {
                         "id": cam.id,
                         "frame": proc_frame,
                         "render_frame": render_frame,
                         "yolo_scale": yolo_scale,
+                        "frame_index": frame_index,
                         "read_age_ms": int((now_ts - read_ts) * 1000) if read_ts else None,
                         "stream_status": stream_status,
                     }
                     prepared_frames.append(item)
 
-                    frame_index = stream_status.get("frames_read", 0)
                     last_index = last_aruco_frame_index.get(cam.id, 0)
-                    if frame_index - last_index >= runtime["aruco_every_n_frames"]:
+                    if (
+                        (not runtime["aruco_crop_first_enabled"] or runtime["aruco_full_frame_fallback"])
+                        and frame_index - last_index >= runtime["aruco_every_n_frames"]
+                    ):
                         last_aruco_frame_index[cam.id] = frame_index
-                        aruco_futures[cam.id] = aruco_pool.submit(
-                            detect_aruco_markers,
-                            aruco_dict,
-                            render_frame,
-                            runtime["aruco_max_width"],
-                        )
+                        aruco_futures[cam.id] = {
+                            "frame_index": frame_index,
+                            "future": aruco_pool.submit(
+                                detect_aruco_markers,
+                                aruco_dict,
+                                render_frame,
+                                runtime["aruco_max_width"],
+                            ),
+                        }
 
                 total_detected_people = 0
                 for frame_batch in chunked(prepared_frames, int(runtime["batch_size"])):
@@ -899,19 +1498,44 @@ def main():
                     for item, results in zip(frame_batch, results_batch):
                         cam_id = item["id"]
                         render_frame = item["render_frame"]
+                        time_scale = camera_time_scale(item.get("stream_status"), runtime)
                         person_boxes = scale_person_boxes(results, item["yolo_scale"])
+                        person_boxes = person_tracker.update(cam_id, person_boxes, render_frame, now_ts)
                         used_person_box_ids = set()
                         marker_seen_workers = set()
 
                         person_count = len(results.boxes)
                         total_detected_people += person_count
-                        if cam_id in aruco_futures:
-                            try:
-                                corners, ids = aruco_futures[cam_id].result(timeout=1.0)
-                            except concurrent.futures.TimeoutError:
-                                corners, ids = None, None
+                        marker_person_matches = {}
+                        if runtime["aruco_crop_first_enabled"]:
+                            corners, ids, marker_person_matches = detect_aruco_in_person_crops(
+                                aruco_dict,
+                                render_frame,
+                                person_boxes,
+                                runtime["aruco_crop_zoom"],
+                                runtime["aruco_crop_margin_ratio"],
+                                runtime["min_marker_area"],
+                            )
                         else:
                             corners, ids = None, None
+
+                        full_corners, full_ids = None, None
+                        aruco_future_info = aruco_futures.get(cam_id)
+                        if (
+                            aruco_future_info is not None
+                            and aruco_future_info.get("frame_index") == item.get("frame_index")
+                        ):
+                            try:
+                                full_corners, full_ids = aruco_future_info["future"].result(timeout=1.0)
+                            except concurrent.futures.TimeoutError:
+                                full_corners, full_ids = None, None
+                        corners, ids, marker_person_matches = merge_aruco_detections(
+                            corners,
+                            ids,
+                            marker_person_matches,
+                            full_corners,
+                            full_ids,
+                        )
 
                         if ids is not None:
                             for i, marker_id in enumerate(ids.flatten()):
@@ -925,18 +1549,47 @@ def main():
                                     continue
 
                                 raw_pos = marker_corners.mean(axis=0)
-                                matched_person = find_person_for_marker(
-                                    raw_pos,
-                                    person_boxes,
-                                    runtime["person_box_margin"],
-                                )
+                                matched_person = marker_person_matches.get(i)
+                                if matched_person is None:
+                                    matched_person = find_person_for_marker(
+                                        raw_pos,
+                                        person_boxes,
+                                        runtime["person_box_margin"],
+                                    )
                                 if matched_person is None:
                                     marker_confirmations.pop((cam_id, marker_id), None)
                                     continue
+                                existing_state = history.get(marker_id)
+                                matched_track_id = matched_person.get("track_id")
+                                if existing_state and existing_state.get("cam_id") == cam_id:
+                                    current_track_id = existing_state.get("track_id")
+                                    if current_track_id and matched_track_id and current_track_id != matched_track_id:
+                                        current_track_visible = any(
+                                            person.get("track_id") == current_track_id
+                                            for person in person_boxes
+                                        )
+                                        switch_key = (cam_id, marker_id, matched_track_id)
+                                        if current_track_visible:
+                                            pending_track_switches.pop(switch_key, None)
+                                            continue
+                                        pending_track_switches[switch_key] = pending_track_switches.get(switch_key, 0) + 1
+                                        if pending_track_switches[switch_key] < max(3, runtime["marker_confirmations_required"] + 1):
+                                            continue
+                                        last_bbox = existing_state.get("last_bbox")
+                                        if last_bbox is not None:
+                                            switch_distance = float(np.linalg.norm(
+                                                bbox_center(last_bbox) - bbox_center(matched_person["bbox"])
+                                            ))
+                                            if switch_distance > runtime["marker_hidden_match_radius_px"]:
+                                                continue
                                 try:
                                     used_person_box_ids.add(person_boxes.index(matched_person))
                                 except ValueError:
                                     pass
+                                if matched_person.get("track_id") is not None:
+                                    person_tracker.bind_employee(cam_id, matched_person["track_id"], marker_id)
+                                    matched_person["employee_marker_id"] = marker_id
+                                    matched_person["global_id"] = f"emp_{marker_id}"
 
                                 confirmation_key = (cam_id, marker_id)
                                 marker_confirmations[confirmation_key] = marker_confirmations.get(confirmation_key, 0) + 1
@@ -950,6 +1603,7 @@ def main():
                                 floor_pos = np.array([(x1f + x2f) / 2.0, y2f], dtype=np.float32)
                                 calibration = distance_calibrations.get(cam_id, {})
                                 map_pos = frame_point_to_map(floor_pos, render_frame.shape, calibration)
+                                worker_zone = resolve_worker_zone(map_pos, cam_id, floor_model)
 
                                 if marker_id not in history:
                                     history[marker_id] = {
@@ -964,6 +1618,7 @@ def main():
                                         "distance_method": calibration.get("method", "legacy_video_pixels"),
                                         "status": "WORKING",
                                         "last_move_ts": now_ts,
+                                        "first_seen_ts": now_ts,
                                         "last_seen_ts": now_ts,
                                         "last_marker_seen_ts": now_ts,
                                         "last_account_ts": now_ts,
@@ -972,9 +1627,15 @@ def main():
                                         "status_times": {"WALKING": 0.0, "WORKING": 0.0},
                                         "path_view": recording_view_path(marker_id, emp["name"], cam_id),
                                         "cam_id": cam_id,
+                                        "track_id": matched_person.get("track_id"),
                                         "last_bbox": matched_person["bbox"],
                                         "last_visual_frame": -1,
                                         "tracking_mode": "aruco",
+                                        "last_work_motion_ts": now_ts,
+                                        "activity_reason": "initial_marker_match",
+                                        "posture": person_posture(matched_person),
+                                        "zone_id": worker_zone.get("id") if worker_zone else "unknown",
+                                        "zone_label": worker_zone.get("label") if worker_zone else "Unknown Zone",
                                     }
 
                                 worker_state = history[marker_id]
@@ -982,6 +1643,7 @@ def main():
                                 if worker_state["cam_id"] != cam_id:
                                     # Keep total distance cumulative, but start a fresh visual path per camera.
                                     worker_state["cam_id"] = cam_id
+                                    worker_state["track_id"] = matched_person.get("track_id")
                                     worker_state["pos_buffer"].clear()
                                     worker_state.setdefault("camera_paths", {})
                                     worker_state["camera_paths"].setdefault(cam_id, [floor_pos.tolist()])
@@ -998,15 +1660,21 @@ def main():
                                     worker_state["last_bbox"] = matched_person["bbox"]
                                     worker_state["tracking_mode"] = "aruco"
                                     worker_state["last_visual_frame"] = loop_counter
+                                    worker_state["zone_id"] = worker_zone.get("id") if worker_zone else "unknown"
+                                    worker_state["zone_label"] = worker_zone.get("label") if worker_zone else "Unknown Zone"
+                                    classify_worker_activity(worker_state, matched_person, render_frame, 0.0, now_ts, runtime)
                                     continue
 
                                 worker_state["last_seen_ts"] = now_ts
                                 worker_state["last_marker_seen_ts"] = now_ts
                                 worker_state["person_conf"] = matched_person["confidence"]
+                                worker_state["track_id"] = matched_person.get("track_id")
                                 worker_state["path_view"] = recording_view_path(marker_id, worker_state["name"], cam_id)
                                 worker_state["last_bbox"] = matched_person["bbox"]
                                 worker_state["tracking_mode"] = "aruco"
                                 worker_state["last_visual_frame"] = loop_counter
+                                worker_state["zone_id"] = worker_zone.get("id") if worker_zone else "unknown"
+                                worker_state["zone_label"] = worker_zone.get("label") if worker_zone else "Unknown Zone"
                                 worker_state.setdefault("camera_paths", {}).setdefault(cam_id, worker_state.get("path", [floor_pos.tolist()]))
                                 worker_state["path"] = worker_state["camera_paths"][cam_id]
                                 worker_state["pos_buffer"].append(floor_pos)
@@ -1028,7 +1696,7 @@ def main():
                                         calibration,
                                         scale,
                                     )
-                                    if dist_feet > 20 and len(worker_state["path"]) > 1:
+                                    if not accept_path_step(worker_state, dist_feet, d_pixels, "aruco"):
                                         worker_state["pos_buffer"].clear()
                                         worker_state.setdefault("map_pos_buffer", deque(maxlen=5)).clear()
                                         continue
@@ -1038,11 +1706,8 @@ def main():
                                     worker_state["distance_method"] = distance_method
                                     worker_state["path"].append(smooth_pos.tolist())
                                     worker_state["camera_paths"][cam_id] = worker_state["path"]
-                                    worker_state["status"] = "WALKING"
-                                    worker_state["last_move_ts"] = now_ts
                                     worker_state["cam_id"] = cam_id
-                                elif now_ts - worker_state["last_move_ts"] > 5:
-                                    worker_state["status"] = "WORKING"
+                                classify_worker_activity(worker_state, matched_person, render_frame, d_pixels, now_ts, runtime)
 
                                 pts = marker_corners.astype(int)
                                 x1, y1, x2, y2 = [int(v) for v in matched_person["bbox"]]
@@ -1061,28 +1726,44 @@ def main():
                         for marker_id, worker_state in history.items():
                             if worker_state.get("cam_id") != cam_id or marker_id in marker_seen_workers:
                                 continue
-                            if now_ts - worker_state.get("last_marker_seen_ts", 0.0) > runtime["marker_hidden_grace_seconds"]:
-                                continue
-
-                            matched_person = find_continuation_person(
-                                worker_state,
+                            marker_age = (now_ts - worker_state.get("last_marker_seen_ts", 0.0)) * time_scale
+                            matched_person = person_tracker.find_employee_detection(
+                                cam_id,
+                                marker_id,
                                 person_boxes,
                                 used_person_box_ids,
-                                runtime["marker_hidden_match_radius_px"],
                             )
+                            tracking_mode = "byte_track_reid"
+                            if matched_person is None:
+                                if marker_age > runtime["marker_hidden_max_seconds"]:
+                                    continue
+                                if marker_age > runtime["marker_hidden_grace_seconds"]:
+                                    continue
+                                matched_person = find_continuation_person(
+                                    worker_state,
+                                    person_boxes,
+                                    used_person_box_ids,
+                                    runtime["marker_hidden_match_radius_px"],
+                                    runtime["marker_hidden_min_iou"],
+                                )
+                                tracking_mode = "marker_hidden"
                             if matched_person is None:
                                 continue
 
                             floor_pos = person_floor_point(matched_person)
                             calibration = distance_calibrations.get(cam_id, {})
                             map_pos = frame_point_to_map(floor_pos, render_frame.shape, calibration)
+                            worker_zone = resolve_worker_zone(map_pos, cam_id, floor_model)
 
                             worker_state["last_seen_ts"] = now_ts
                             worker_state["person_conf"] = min(worker_state.get("person_conf", 0.0), matched_person["confidence"])
+                            worker_state["track_id"] = matched_person.get("track_id")
                             worker_state["path_view"] = recording_view_path(marker_id, worker_state["name"], cam_id)
                             worker_state["last_bbox"] = matched_person["bbox"]
-                            worker_state["tracking_mode"] = "marker_hidden"
+                            worker_state["tracking_mode"] = tracking_mode
                             worker_state["last_visual_frame"] = loop_counter
+                            worker_state["zone_id"] = worker_zone.get("id") if worker_zone else "unknown"
+                            worker_state["zone_label"] = worker_zone.get("label") if worker_zone else "Unknown Zone"
                             worker_state.setdefault("camera_paths", {}).setdefault(cam_id, worker_state.get("path", [floor_pos.tolist()]))
                             worker_state["path"] = worker_state["camera_paths"][cam_id]
                             worker_state["pos_buffer"].append(floor_pos)
@@ -1105,25 +1786,50 @@ def main():
                                     calibration,
                                     scale,
                                 )
-                                if dist_feet <= 20 or len(worker_state["path"]) <= 1:
+                                if accept_path_step(worker_state, dist_feet, d_pixels, tracking_mode):
                                     worker_state["dist"] += dist_feet
                                     worker_state["last_map_pos"] = smooth_map_pos.tolist() if smooth_map_pos is not None else None
                                     worker_state["distance_method"] = distance_method
                                     worker_state["path"].append(smooth_pos.tolist())
                                     worker_state["camera_paths"][cam_id] = worker_state["path"]
-                                    worker_state["status"] = "WALKING"
-                                    worker_state["last_move_ts"] = now_ts
-                            elif now_ts - worker_state["last_move_ts"] > 5:
-                                worker_state["status"] = "WORKING"
+                                else:
+                                    worker_state["pos_buffer"].clear()
+                                    worker_state.setdefault("map_pos_buffer", deque(maxlen=5)).clear()
+                            classify_worker_activity(worker_state, matched_person, render_frame, d_pixels, now_ts, runtime)
 
                             x1, y1, x2, y2 = [int(v) for v in matched_person["bbox"]]
                             cv2.rectangle(render_frame, (x1, y1), (x2, y2), (0, 214, 255), 2)
                             cv2.putText(
                                 render_frame,
-                                f"{worker_state['name']} | marker hidden",
+                                f"{worker_state['name']} | {tracking_mode}",
                                 (x1, max(20, y1 - 10)),
                                 cv2.FONT_HERSHEY_SIMPLEX,
                                 0.55,
+                                (255, 255, 255),
+                                2,
+                            )
+
+                        for idx, person in enumerate(person_boxes):
+                            if idx in used_person_box_ids:
+                                continue
+                            if likely_recent_tracked_person(
+                                person,
+                                history.values(),
+                                cam_id,
+                                now_ts,
+                                runtime["marker_hidden_max_seconds"],
+                                runtime["marker_hidden_match_radius_px"],
+                            ):
+                                continue
+                            x1, y1, x2, y2 = [int(v) for v in person["bbox"]]
+                            cv2.rectangle(render_frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                            track_label = person.get("global_id") or f"track_{person.get('track_id', '?')}"
+                            cv2.putText(
+                                render_frame,
+                                f"UNKNOWN {track_label} | no marker {person['confidence']:.2f}",
+                                (x1, max(20, y1 - 10)),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.5,
                                 (255, 255, 255),
                                 2,
                             )
@@ -1220,6 +1926,7 @@ def main():
         pass
     finally:
         path_video_recorder.close()
+        export_employee_report_on_shutdown()
         aruco_pool.shutdown(wait=False, cancel_futures=True)
         image_writer_pool.shutdown(wait=False, cancel_futures=True)
         for cam in active_cameras.values():
