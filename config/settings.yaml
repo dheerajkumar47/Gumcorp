@@ -20,23 +20,24 @@ runtime:
   aruco_crop_margin_ratio: 0.08
   aruco_full_frame_fallback: true
   batch_size: 4
-  dashboard_image_width: 960
+  dashboard_image_width: 1280
   dashboard_fps: 10
   image_writer_workers: 2
   path_video_every_n_frames: 10
-  path_video_fps: 5.0
+  path_video_fps: 1.0
+  path_video_min_frames: 3
   path_video_codec: "mp4v"
   redirect_decoder_logs: true
   decoder_log_file: "logs/decoder_ffmpeg.log"
   monitor_interval_seconds: 2.0
   reconnect_after: 10
-  reconnect_interval_seconds: 5.0
-  stale_camera_after_seconds: 3.0
+  reconnect_interval_seconds: 8.0
+  stale_camera_after_seconds: 12.0
   marker_confirmations_required: 2
   marker_stale_after_seconds: 8.0
-  marker_hidden_grace_seconds: 30.0
+  marker_hidden_grace_seconds: 90.0
   marker_hidden_match_radius_px: 280.0
-  marker_hidden_max_seconds: 30.0
+  marker_hidden_max_seconds: 90.0
   marker_hidden_min_iou: 0.02
   tracker_iou_threshold: 0.12
   tracker_center_radius_px: 180.0
@@ -49,7 +50,7 @@ runtime:
   activity_idle_after_seconds: 20.0
   min_marker_area: 80
   employee_records_file: "logs/employee_records.json"
-  jpeg_quality_live: 65
+  jpeg_quality_live: 82
   camera_registry_file: "data/cameras.json"
 
 camera_profiles:
@@ -104,7 +105,7 @@ cameras:
     stream_profiles:
       main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30312/unicast/c1/s1/live"
       sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30312/unicast/c1/s1/live"
-    enabled: true
+    enabled: false
     position: [100, 500]
     calibration_points:
       camera_points: []
@@ -115,7 +116,7 @@ cameras:
     stream_profiles:
       main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30322/unicast/c1/s1/live"
       sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30322/unicast/c1/s1/live"
-    enabled: true
+    enabled: false
     position: [500, 500]
     calibration_points:
       camera_points: []
@@ -126,7 +127,7 @@ cameras:
     stream_profiles:
       main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30332/unicast/c1/s1/live"
       sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30332/unicast/c1/s1/live"
-    enabled: true
+    enabled: false
     position: [900, 500]
     calibration_points:
       camera_points: []
@@ -137,7 +138,7 @@ cameras:
     stream_profiles:
       main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30342/unicast/c1/s1/live"
       sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30342/unicast/c1/s1/live"
-    enabled: true
+    enabled: false
     position: [1300, 500]
     calibration_points:
       camera_points: []
@@ -172,6 +173,62 @@ cameras:
       sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30272/unicast/c1/s1/live"
     enabled: true
     position: [900, 900]
+    calibration_points:
+      camera_points: []
+      map_points: []
+
+  - id: "d45"
+    label: "sheetline 2"
+    zone: "sheetline"
+    role: "sheetline2"
+    video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30442/unicast/c1/s1/live"
+    stream_profiles:
+      main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30442/unicast/c1/s1/live"
+      sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30442/unicast/c1/s1/live"
+    enabled: true
+    position: [3288, 1144]
+    calibration_points:
+      camera_points: []
+      map_points: []
+
+  - id: "d46"
+    label: "pallet line 2"
+    zone: "palletline"
+    role: "palletline2"
+    video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30452/unicast/c1/s1/live"
+    stream_profiles:
+      main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30452/unicast/c1/s1/live"
+      sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30452/unicast/c1/s1/live"
+    enabled: true
+    position: [3291, 1171]
+    calibration_points:
+      camera_points: []
+      map_points: []
+
+  - id: "d47"
+    label: "main production 2"
+    zone: "main_production"
+    role: "main_production2"
+    video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30462/unicast/c1/s1/live"
+    stream_profiles:
+      main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30462/unicast/c1/s1/live"
+      sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30462/unicast/c1/s1/live"
+    enabled: true
+    position: [2985, 928]
+    calibration_points:
+      camera_points: []
+      map_points: []
+
+  - id: "d48"
+    label: "inside sheetline"
+    zone: "sheetline"
+    role: "inside_sheetline"
+    video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30472/unicast/c1/s1/live"
+    stream_profiles:
+      main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30472/unicast/c1/s1/live"
+      sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30472/unicast/c1/s1/live"
+    enabled: true
+    position: [3318, 1054]
     calibration_points:
       camera_points: []
       map_points: []

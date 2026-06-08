@@ -126,13 +126,18 @@ def parse_args():
     parser.add_argument("--inference-width", type=int, default=None, help="Resize width before AI inference")
     parser.add_argument("--target-fps", type=float, default=None, help="Main processing loop FPS cap")
     parser.add_argument("--batch-size", type=int, default=None, help="Max camera frames per YOLO batch")
-    parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto", help="Inference device")
+    parser.add_argument("--performance-profile", choices=["balanced", "speed", "quality"], default="balanced", help="Performance tuning profile for inference and ArUco detection")
+    parser.add_argument("--device", type=str, default="auto", help="Inference device, e.g. cpu, cuda, cuda:0,1")
+    parser.add_argument("--aruco-zoom", type=float, default=None, help="Zoom factor for ArUco crop detection")
     parser.add_argument("--camera-registry", default=None, help="Override camera registry JSON file")
     parser.add_argument("--replay-speed", type=float, default=None, help="Local video replay speed multiplier")
     return parser.parse_args()
 
 def get_runtime_config(config, args):
     runtime = config.get("runtime", {})
+    log_dir = os.environ.get("FACTORY_AI_LOG_DIR", "logs")
+    recording_dir = os.environ.get("FACTORY_AI_RECORDING_DIR", "outputs/recordings")
+    report_dir = os.environ.get("FACTORY_AI_REPORT_DIR", "outputs/reports")
     profile_name = args.camera_profile or runtime.get("camera_profile", "main_stream")
     profile = config.get("camera_profiles", {}).get(profile_name, {})
     return {
@@ -146,17 +151,23 @@ def get_runtime_config(config, args):
         "aruco_every_n_frames": max(1, int(runtime.get("aruco_every_n_frames", 3))),
         "aruco_workers": max(1, int(runtime.get("aruco_workers", 2))),
         "aruco_crop_first_enabled": bool(runtime.get("aruco_crop_first_enabled", True)),
-        "aruco_crop_zoom": max(1.0, float(runtime.get("aruco_crop_zoom", 4.0))),
+        "aruco_crop_zoom": max(1.0, float(args.aruco_zoom or runtime.get("aruco_crop_zoom", 4.0))),
         "aruco_crop_margin_ratio": max(0.0, float(runtime.get("aruco_crop_margin_ratio", 0.08))),
         "aruco_full_frame_fallback": bool(runtime.get("aruco_full_frame_fallback", False)),
         "dashboard_image_width": max(320, int(runtime.get("dashboard_image_width", 960))),
         "dashboard_fps": max(1.0, float(runtime.get("dashboard_fps", 5.0))),
         "image_writer_workers": max(1, int(runtime.get("image_writer_workers", 2))),
         "path_video_every_n_frames": max(1, int(runtime.get("path_video_every_n_frames", 10))),
-        "path_video_fps": max(1.0, float(runtime.get("path_video_fps", 5.0))),
+        "path_video_fps": max(0.5, float(runtime.get("path_video_fps", 5.0))),
+        "path_video_min_frames": max(1, int(runtime.get("path_video_min_frames", 3))),
         "path_video_codec": str(runtime.get("path_video_codec", "mp4v")),
         "redirect_decoder_logs": bool(runtime.get("redirect_decoder_logs", True)),
-        "decoder_log_file": runtime.get("decoder_log_file", "logs/decoder_ffmpeg.log"),
+        "log_dir": log_dir,
+        "recording_dir": recording_dir,
+        "report_dir": report_dir,
+        "live_stats_file": os.path.join(log_dir, "live_stats.json"),
+        "dashboard_live_stats_file": "logs/live_stats.json",
+        "decoder_log_file": os.path.join(log_dir, "decoder_ffmpeg.log"),
         "monitor_interval_seconds": runtime.get("monitor_interval_seconds", 2.0),
         "jpeg_quality_live": runtime.get("jpeg_quality_live", 75),
         "reconnect_after": runtime.get("reconnect_after", 10),
@@ -178,16 +189,108 @@ def get_runtime_config(config, args):
         "activity_gesture_motion_threshold": float(runtime.get("activity_gesture_motion_threshold", 0.018)),
         "activity_idle_after_seconds": float(runtime.get("activity_idle_after_seconds", 20.0)),
         "min_marker_area": float(runtime.get("min_marker_area", 80.0)),
-        "employee_records_file": runtime.get("employee_records_file", "logs/employee_records.json"),
+        "employee_records_file": os.path.join(log_dir, "employee_records.json"),
         "camera_registry_file": args.camera_registry or runtime.get("camera_registry_file", "data/cameras.json"),
+        "performance_profile": args.performance_profile or runtime.get("performance_profile", "balanced"),
     }
 
-def select_device(requested_device):
-    if requested_device == "cpu":
-        return "cpu"
-    if requested_device == "cuda":
-        return "cuda" if torch is not None and torch.cuda.is_available() else "cpu"
-    return "cuda" if torch is not None and torch.cuda.is_available() else "cpu"
+def select_devices(requested_device):
+    if requested_device is None:
+        requested_device = "auto"
+    requested = [item.strip() for item in requested_device.split(",") if item.strip()]
+    if not requested or requested == ["auto"]:
+        if torch is not None and torch.cuda.is_available():
+            return [f"cuda:{i}" for i in range(torch.cuda.device_count())]
+        return ["cpu"]
+
+    devices = []
+    for item in requested:
+        if item == "cpu":
+            devices.append("cpu")
+        elif item == "cuda":
+            if torch is not None and torch.cuda.is_available():
+                devices.extend(f"cuda:{i}" for i in range(torch.cuda.device_count()))
+            else:
+                devices.append("cpu")
+        elif item.startswith("cuda:"):
+            if torch is not None and torch.cuda.is_available():
+                try:
+                    idx = int(item.split(":", 1)[1])
+                    if 0 <= idx < torch.cuda.device_count():
+                        devices.append(item)
+                except ValueError:
+                    pass
+            else:
+                devices.append("cpu")
+        else:
+            if torch is not None and torch.cuda.is_available() and item.isdigit():
+                idx = int(item)
+                if 0 <= idx < torch.cuda.device_count():
+                    devices.append(f"cuda:{idx}")
+    if not devices:
+        return ["cpu"]
+    return list(dict.fromkeys(devices))
+
+
+def load_models_for_devices(model_path, devices):
+    models = []
+    for device in devices:
+        worker_model = YOLO(model_path)
+        if hasattr(worker_model, "to"):
+            worker_model.to(device)
+        models.append({"device": device, "model": worker_model})
+    if torch is not None and any(str(device).startswith("cuda") for device in devices):
+        torch.backends.cudnn.benchmark = True
+    return models
+
+
+def run_yolo_inference(worker, frames, confidence, classes):
+    return worker["model"](
+        frames,
+        conf=confidence,
+        classes=classes,
+        verbose=False,
+        device=worker["device"],
+        half=(worker["device"] != "cpu"),
+    )
+
+
+def apply_performance_profile(runtime):
+    profile = runtime.get("performance_profile", "balanced")
+    if profile == "balanced":
+        runtime["inference_width"] = min(runtime["inference_width"], 1280)
+        runtime["target_fps"] = min(runtime["target_fps"], 10.0)
+        runtime["batch_size"] = max(runtime["batch_size"], 6)
+        runtime["aruco_max_width"] = min(runtime["aruco_max_width"], 1280)
+        runtime["aruco_every_n_frames"] = max(runtime["aruco_every_n_frames"], 6)
+        runtime["aruco_workers"] = max(1, min(runtime["aruco_workers"], 2))
+        runtime["aruco_full_frame_fallback"] = False
+        runtime["dashboard_image_width"] = min(runtime["dashboard_image_width"], 1280)
+        runtime["dashboard_fps"] = min(runtime["dashboard_fps"], 4.0)
+        runtime["jpeg_quality_live"] = max(75, min(runtime["jpeg_quality_live"], 82))
+        runtime["stale_camera_after_seconds"] = max(runtime["stale_camera_after_seconds"], 45.0)
+        runtime["reconnect_interval_seconds"] = max(runtime["reconnect_interval_seconds"], 15.0)
+    elif profile == "speed":
+        runtime["inference_width"] = min(runtime["inference_width"], 960)
+        runtime["target_fps"] = min(runtime["target_fps"], 8.0)
+        runtime["batch_size"] = max(runtime["batch_size"], 8)
+        runtime["aruco_max_width"] = min(runtime["aruco_max_width"], 960)
+        runtime["aruco_every_n_frames"] = max(2, int(runtime["aruco_every_n_frames"] * 2))
+        runtime["aruco_workers"] = max(1, min(runtime["aruco_workers"], 2))
+        runtime["aruco_full_frame_fallback"] = False
+        runtime["dashboard_image_width"] = min(runtime["dashboard_image_width"], 640)
+        runtime["dashboard_fps"] = max(2, min(runtime["dashboard_fps"], 3))
+        runtime["jpeg_quality_live"] = min(runtime["jpeg_quality_live"], 55)
+        runtime["stale_camera_after_seconds"] = max(runtime["stale_camera_after_seconds"], 60.0)
+        runtime["reconnect_interval_seconds"] = max(runtime["reconnect_interval_seconds"], 20.0)
+    elif profile == "quality":
+        runtime["inference_width"] = max(runtime["inference_width"], min(1920, int(runtime["inference_width"] * 1.25)))
+        runtime["aruco_max_width"] = max(runtime["aruco_max_width"], 2560)
+        runtime["aruco_crop_zoom"] = max(runtime["aruco_crop_zoom"], 6.0)
+        runtime["aruco_every_n_frames"] = max(1, int(runtime["aruco_every_n_frames"] / 2))
+        runtime["aruco_workers"] = max(runtime["aruco_workers"], 4)
+        runtime["batch_size"] = max(runtime["batch_size"], 4)
+    return runtime
 
 def get_acceleration_info(requested_device, selected_device):
     cuda_available = bool(torch is not None and torch.cuda.is_available())
@@ -246,19 +349,53 @@ def resize_to_width(frame, max_width):
 def detect_aruco_markers(aruco_dict, frame, max_width):
     aruco_frame, aruco_scale = resize_to_width(frame, max_width)
     gray = cv2.cvtColor(aruco_frame, cv2.COLOR_BGR2GRAY)
-    detector = cv2.aruco.ArucoDetector(aruco_dict, cv2.aruco.DetectorParameters())
-    corners, ids, _ = detector.detectMarkers(gray)
+    detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_detector_params())
+    corners, ids = detect_markers_with_variants(detector, gray)
     if corners is not None and aruco_scale != 1.0:
         corners = tuple(corner * aruco_scale for corner in corners)
     return corners, ids
+
+def aruco_detector_params():
+    params = cv2.aruco.DetectorParameters()
+    params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+    params.adaptiveThreshWinSizeMin = 3
+    params.adaptiveThreshWinSizeMax = 53
+    params.adaptiveThreshWinSizeStep = 4
+    params.minMarkerPerimeterRate = 0.015
+    params.maxMarkerPerimeterRate = 4.0
+    params.polygonalApproxAccuracyRate = 0.035
+    params.errorCorrectionRate = 0.8
+    return params
+
+def detect_markers_with_variants(detector, gray):
+    variants = [gray, cv2.equalizeHist(gray)]
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    variants.append(clahe.apply(gray))
+    variants.append(cv2.filter2D(gray, -1, np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)))
+
+    seen = set()
+    merged_corners = []
+    merged_ids = []
+    for variant in variants:
+        corners, ids, _ = detector.detectMarkers(variant)
+        if ids is None:
+            continue
+        for marker_id, marker_corners in zip(ids.flatten(), corners):
+            marker_id = int(marker_id)
+            if marker_id in seen:
+                continue
+            seen.add(marker_id)
+            merged_corners.append(marker_corners)
+            merged_ids.append(marker_id)
+    if not merged_ids:
+        return None, None
+    return tuple(merged_corners), np.array([[marker_id] for marker_id in merged_ids], dtype=np.int32)
 
 def detect_aruco_in_person_crops(aruco_dict, frame, person_boxes, zoom_scale, margin_ratio, min_marker_area):
     if not person_boxes:
         return None, None, {}
     height, width = frame.shape[:2]
-    params = cv2.aruco.DetectorParameters()
-    params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
-    detector = cv2.aruco.ArucoDetector(aruco_dict, params)
+    detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_detector_params())
     candidates = []
 
     for person_index, person in enumerate(person_boxes):
@@ -279,10 +416,7 @@ def detect_aruco_in_person_crops(aruco_dict, frame, person_boxes, zoom_scale, ma
             continue
         zoom = cv2.resize(crop, None, fx=zoom_scale, fy=zoom_scale, interpolation=cv2.INTER_CUBIC)
         gray = cv2.cvtColor(zoom, cv2.COLOR_BGR2GRAY)
-        crop_corners, crop_ids, _ = detector.detectMarkers(gray)
-        if crop_ids is None:
-            equalized = cv2.equalizeHist(gray)
-            crop_corners, crop_ids, _ = detector.detectMarkers(equalized)
+        crop_corners, crop_ids = detect_markers_with_variants(detector, gray)
         if crop_ids is None:
             continue
 
@@ -924,34 +1058,56 @@ def find_continuation_person(worker_state, person_boxes, used_box_ids, max_radiu
     last_bbox = worker_state.get("last_bbox")
     last_center = bbox_center(last_bbox) if last_bbox else None
     last_aspect = bbox_aspect(last_bbox) if last_bbox else None
+    last_track_id = worker_state.get("track_id")
+    last_feature = worker_state.get("last_feature")
     candidates = []
     for idx, person in enumerate(person_boxes):
         if idx in used_box_ids:
             continue
+        if last_track_id is not None and person.get("track_id") != last_track_id:
+            continue
         floor_pos = person_floor_point(person)
         distance_px = float(np.linalg.norm(floor_pos - last_pos))
-        if distance_px <= max_radius_px:
-            iou = bbox_iou(last_bbox, person["bbox"]) if last_bbox else 0.0
-            center_distance = float(np.linalg.norm(bbox_center(person["bbox"]) - last_center)) if last_center is not None else distance_px
-            aspect_penalty = 0.0
-            if last_aspect:
-                aspect_penalty = abs(np.log(bbox_aspect(person["bbox"]) / last_aspect))
-            area_penalty = 0.0
-            if last_bbox:
-                prev_area = max(1.0, bbox_area(last_bbox))
-                next_area = max(1.0, bbox_area(person["bbox"]))
-                area_penalty = abs(np.log(next_area / prev_area))
-                if iou < min_iou and distance_px > max_radius_px * 0.75 and center_distance > max_radius_px * 0.75:
-                    continue
-                if area_penalty > 1.35:
-                    continue
-                if aspect_penalty > 1.1:
-                    continue
-            score = (distance_px * 0.55) + (center_distance * 0.35) - (iou * 160.0) + (area_penalty * 25.0) + (aspect_penalty * 20.0)
-            candidates.append((score, distance_px, idx, person))
+        iou = bbox_iou(last_bbox, person["bbox"]) if last_bbox else 0.0
+        center_distance = float(np.linalg.norm(bbox_center(person["bbox"]) - last_center)) if last_center is not None else distance_px
+        feature_score = feature_similarity(last_feature, person.get("feature"))
+        same_track = last_track_id is not None and person.get("track_id") == last_track_id
+        spatial_good = distance_px <= max_radius_px or center_distance <= max_radius_px
+        strong_visual = feature_score >= 0.58
+        weak_visual = feature_score >= 0.48
+
+        if not same_track and not (spatial_good and weak_visual) and not strong_visual:
+            continue
+
+        aspect_penalty = 0.0
+        if last_aspect:
+            aspect_penalty = abs(np.log(bbox_aspect(person["bbox"]) / last_aspect))
+        area_penalty = 0.0
+        if last_bbox:
+            prev_area = max(1.0, bbox_area(last_bbox))
+            next_area = max(1.0, bbox_area(person["bbox"]))
+            area_penalty = abs(np.log(next_area / prev_area))
+            if not same_track and area_penalty > 1.45 and not strong_visual:
+                continue
+            if not same_track and aspect_penalty > 1.20 and not strong_visual:
+                continue
+            if not same_track and iou < min_iou and not weak_visual:
+                continue
+
+        score = (
+            distance_px * 0.45
+            + center_distance * 0.30
+            - iou * 180.0
+            - feature_score * 180.0
+            + area_penalty * 22.0
+            + aspect_penalty * 18.0
+        )
+        if same_track:
+            score -= 250.0
+        candidates.append((score, idx, person))
     if not candidates:
         return None
-    _, _, idx, person = min(candidates, key=lambda item: item[0])
+    _, idx, person = min(candidates, key=lambda item: item[0])
     used_box_ids.add(idx)
     return person
 
@@ -1016,28 +1172,40 @@ def build_employee_record(marker_id, worker_state, now_ts):
         worker_state["status"] = "WORKING"
     if "status_times" in worker_state:
         worker_state["status_times"].pop("LOST", None)
+    last_seen_age = now_ts - worker_state.get("last_seen_ts", now_ts)
+    visible_now = bool(worker_state.get("visible_now", False))
+    display_status = worker_state["status"] if visible_now or last_seen_age <= 8.0 else "NOT_VISIBLE"
+    tracking_mode = worker_state.get("tracking_mode", "unknown") if visible_now or last_seen_age <= 8.0 else "waiting_for_reappearance"
     return {
-        "id": marker_id,
+        "id": worker_state.get("display_marker_id", marker_id),
+        "opencv_marker_id": worker_state.get("opencv_marker_id", marker_id),
         "name": worker_state["name"],
         "dept": worker_state["dept"],
-        "status": worker_state["status"],
+        "status": display_status,
         "current_camera": worker_state.get("cam_id"),
         "zone": worker_state.get("zone_label", "Unknown Zone"),
         "zone_id": worker_state.get("zone_id", "unknown"),
         "total_distance_ft": float(round(worker_state["dist"], 2)),
         "first_seen_ts": round(float(worker_state.get("first_seen_ts", now_ts)), 3),
         "last_seen_ts": round(float(worker_state.get("last_seen_ts", now_ts)), 3),
-        "last_seen_age": round(now_ts - worker_state.get("last_seen_ts", now_ts), 2),
+        "last_seen_age": round(last_seen_age, 2),
+        "visible_now": visible_now,
         "person_conf": round(worker_state.get("person_conf", 0.0), 3),
         "distance_method": worker_state.get("distance_method", "unknown"),
-        "tracking_mode": worker_state.get("tracking_mode", "unknown"),
+        "tracking_mode": tracking_mode,
         "posture": worker_state.get("posture", "unknown"),
         "activity_reason": worker_state.get("activity_reason", "unknown"),
         "activity_motion": worker_state.get("activity_motion_ema", 0.0),
         "camera_times_sec": {k: round(v, 2) for k, v in worker_state.get("camera_times", {}).items()},
         "status_times_sec": {k: round(v, 2) for k, v in worker_state.get("status_times", {}).items()},
-        "path_view": worker_state.get("path_view", recording_view_path(marker_id, worker_state["name"], worker_state.get("cam_id", "unknown"))),
+        "path_view": worker_state.get("path_view", recording_view_path(worker_state.get("display_marker_id", marker_id), worker_state["name"], worker_state.get("cam_id", "unknown"))),
     }
+
+def recording_root():
+    return os.environ.get("FACTORY_AI_RECORDING_DIR", "outputs/recordings")
+
+def report_root():
+    return os.environ.get("FACTORY_AI_REPORT_DIR", "outputs/reports")
 
 def safe_filename(value):
     cleaned = "".join(ch if ch.isalnum() else "_" for ch in str(value).strip())
@@ -1048,10 +1216,10 @@ def recording_filename(marker_id, employee_name, cam_id):
     return f"{marker_id}_{safe_filename(employee_name)}_{safe_filename(cam_id)}.mp4"
 
 def recording_disk_path(marker_id, employee_name, cam_id):
-    return f"outputs/recordings/{recording_filename(marker_id, employee_name, cam_id)}"
+    return str(Path(recording_root()) / recording_filename(marker_id, employee_name, cam_id))
 
 def recording_view_path(marker_id, employee_name, cam_id):
-    return f"/outputs/recordings/{recording_filename(marker_id, employee_name, cam_id)}"
+    return "/" + str(Path(recording_root()) / recording_filename(marker_id, employee_name, cam_id)).replace("\\", "/")
 
 def write_jpeg_atomic(path, frame, quality):
     temp_path = path.replace(".jpg", "_tmp.jpg")
@@ -1064,32 +1232,34 @@ def write_jpeg_atomic(path, frame, quality):
 def clear_startup_outputs(runtime):
     Path("logs").mkdir(exist_ok=True)
     Path("outputs/live").mkdir(parents=True, exist_ok=True)
-    Path("outputs/reports").mkdir(parents=True, exist_ok=True)
+    Path(runtime["log_dir"]).mkdir(parents=True, exist_ok=True)
+    Path(runtime["recording_dir"]).mkdir(parents=True, exist_ok=True)
+    Path(runtime["report_dir"]).mkdir(parents=True, exist_ok=True)
 
     empty_timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     Path(runtime["employee_records_file"]).write_text(
         json.dumps({"timestamp": empty_timestamp, "employees": []}, indent=2),
         encoding="utf-8",
     )
-    Path("logs/live_stats.json").write_text(
-        json.dumps(
-            {
-                "timestamp": empty_timestamp,
-                "uptime": 0,
-                "cameras": [],
-                "total_person_count": 0,
-                "stats": [],
-                "performance": {},
-                "runtime": {},
-                "acceleration": {},
-                "lunch_mode": False,
-                "break_message": "",
-                "startup_message": "Backend starting. Waiting for first processed frames.",
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
+    startup_payload = json.dumps(
+        {
+            "timestamp": empty_timestamp,
+            "uptime": 0,
+            "cameras": [],
+            "total_person_count": 0,
+            "stats": [],
+            "performance": {},
+            "runtime": {},
+            "acceleration": {},
+            "lunch_mode": False,
+            "break_message": "",
+            "startup_message": "Backend starting. Waiting for first processed frames.",
+        },
+        indent=2,
     )
+    for live_stats_path in {runtime["live_stats_file"], runtime["dashboard_live_stats_file"]}:
+        Path(live_stats_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(live_stats_path).write_text(startup_payload, encoding="utf-8")
 
     for path in Path("outputs/live").glob("*.jpg"):
         try:
@@ -1097,9 +1267,10 @@ def clear_startup_outputs(runtime):
         except OSError:
             pass
 class VideoRecorder:
-    def __init__(self, fps, codec):
+    def __init__(self, fps, codec, min_frames=3):
         self.fps = fps
         self.codec = codec
+        self.min_frames = min_frames
         self._writers = {}
 
     def write(self, path, frame):
@@ -1113,24 +1284,31 @@ class VideoRecorder:
             writer = cv2.VideoWriter(path, fourcc, self.fps, (width, height))
             if not writer.isOpened():
                 return False
-            self._writers[path] = {"writer": writer, "size": (width, height)}
+            self._writers[path] = {"writer": writer, "size": (width, height), "frames": 0}
             writer_info = self._writers[path]
         writer_info["writer"].write(frame)
+        writer_info["frames"] += 1
         return True
 
     def close(self):
-        for writer_info in self._writers.values():
+        for path, writer_info in self._writers.items():
             writer_info["writer"].release()
+            if writer_info.get("frames", 0) < self.min_frames:
+                try:
+                    Path(path).unlink()
+                except OSError:
+                    pass
         self._writers.clear()
 
 def export_employee_report_on_shutdown():
     try:
         from tools.reporting.export_employee_pdf import build_pdf, load_json, timestamped_report_path
 
-        records_payload = load_json(Path("logs/employee_records.json"))
-        live_payload = load_json(Path("logs/live_stats.json"))
+        log_dir = Path(os.environ.get("FACTORY_AI_LOG_DIR", "logs"))
+        records_payload = load_json(log_dir / "employee_records.json")
+        live_payload = load_json(log_dir / "live_stats.json")
         if records_payload.get("employees") or records_payload.get("stats"):
-            output_path = timestamped_report_path("outputs/reports")
+            output_path = timestamped_report_path(report_root())
             build_pdf(records_payload, live_payload, output_path)
             print(f"Employee activity PDF saved to {output_path}")
     except Exception as exc:
@@ -1273,8 +1451,17 @@ def build_threaded_camera(cam, runtime):
         reconnect_interval_seconds=runtime["reconnect_interval_seconds"],
         stale_after_seconds=runtime["stale_camera_after_seconds"],
     )
+    camera.label = cam.get("label") or cam.get("id")
+    camera.zone = cam.get("zone", "")
+    camera.role = cam.get("role", "")
     camera.start()
     return camera
+
+
+def apply_camera_metadata(camera, cam_config):
+    camera.label = cam_config.get("label") or cam_config.get("id")
+    camera.zone = cam_config.get("zone", "")
+    camera.role = cam_config.get("role", "")
 
 
 def sync_runtime_cameras(active_cameras, active_specs, ordered_ids, config, runtime, registry_path, registry_lock):
@@ -1296,6 +1483,7 @@ def sync_runtime_cameras(active_cameras, active_specs, ordered_ids, config, runt
         if cam_id not in active_cameras:
             camera = build_threaded_camera(cam, runtime)
             if camera is not None:
+                apply_camera_metadata(camera, cam)
                 active_cameras[cam_id] = camera
                 active_specs[cam_id] = signature
             continue
@@ -1303,8 +1491,11 @@ def sync_runtime_cameras(active_cameras, active_specs, ordered_ids, config, runt
             active_cameras[cam_id].stop()
             camera = build_threaded_camera(cam, runtime)
             if camera is not None:
+                apply_camera_metadata(camera, cam)
                 active_cameras[cam_id] = camera
                 active_specs[cam_id] = signature
+        else:
+            apply_camera_metadata(active_cameras[cam_id], cam)
 
     ordered_ids[:] = [cam_id for cam_id in desired_order if cam_id in active_cameras]
 
@@ -1316,7 +1507,10 @@ def main():
     registry_lock = threading.Lock()
     ensure_camera_registry(config, registry_path)
     clear_startup_outputs(runtime)
-    device = select_device(args.device)
+    runtime = apply_performance_profile(runtime)
+    devices = select_devices(args.device)
+    device = devices[0]
+    device_desc = ",".join(devices)
     acceleration = get_acceleration_info(args.device, device)
     decoder_log_handle = None
     if runtime["redirect_decoder_logs"]:
@@ -1324,20 +1518,26 @@ def main():
 
     employee_df = pd.read_csv("data/employees.csv")
     employee_map = {
-        int(r["marker_id"]): {"name": r["name"], "dept": r.get("department", "Production")}
+        int(r.get("opencv_marker_id", r["marker_id"])): {
+            "id": int(r["marker_id"]),
+            "opencv_marker_id": int(r.get("opencv_marker_id", r["marker_id"])),
+            "name": r["name"],
+            "dept": r.get("department", "Production"),
+            "active": str(r.get("active", "yes")).strip().lower() != "no",
+        }
         for _, r in employee_df.iterrows()
-        if not str(r["name"]).startswith("Employee_")
     }
 
-    model = YOLO(config["detection"]["model_path"])
-    if hasattr(model, "to"):
-        model.to(device)
-    if torch is not None and device == "cuda":
-        torch.backends.cudnn.benchmark = True
+    inference_workers = load_models_for_devices(config["detection"]["model_path"], devices)
+    inference_executor = (
+        concurrent.futures.ThreadPoolExecutor(max_workers=len(inference_workers))
+        if len(inference_workers) > 1
+        else None
+    )
     if acceleration["cuda_warning"]:
         print(acceleration["cuda_warning"])
     print(
-        f"Runtime: device={device}, batch={runtime['batch_size']}, "
+        f"Runtime: device={device_desc}, profile={runtime['performance_profile']}, batch={runtime['batch_size']}, "
         f"inference_width={runtime['inference_width']}, aruco_every={runtime['aruco_every_n_frames']}, "
         f"dashboard={runtime['dashboard_image_width']}px/{runtime['dashboard_fps']}fps, "
         f"tracker={'ByteTrack' if sv is not None and hasattr(sv, 'ByteTrack') else 'local'}+ReID"
@@ -1359,8 +1559,10 @@ def main():
     pending_live_writes = {}
     loop_counter = 0
     os.makedirs("logs", exist_ok=True)
+    os.makedirs(runtime["log_dir"], exist_ok=True)
     os.makedirs("outputs/live", exist_ok=True)
-    os.makedirs("outputs/recordings", exist_ok=True)
+    os.makedirs(runtime["recording_dir"], exist_ok=True)
+    os.makedirs(runtime["report_dir"], exist_ok=True)
 
     aruco_dict = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, config["aruco"]["dictionary_type"]))
     threading.Thread(target=start_server, args=(registry_path, registry_lock), daemon=True).start()
@@ -1385,7 +1587,11 @@ def main():
 
     aruco_pool = concurrent.futures.ThreadPoolExecutor(max_workers=runtime["aruco_workers"])
     image_writer_pool = concurrent.futures.ThreadPoolExecutor(max_workers=runtime["image_writer_workers"])
-    path_video_recorder = VideoRecorder(runtime["path_video_fps"], runtime["path_video_codec"])
+    path_video_recorder = VideoRecorder(
+        runtime["path_video_fps"],
+        runtime["path_video_codec"],
+        runtime["path_video_min_frames"],
+    )
     last_camera_sync_ts = 0.0
 
     try:
@@ -1421,7 +1627,8 @@ def main():
                         "dashboard_image_width": runtime["dashboard_image_width"],
                         "dashboard_fps": runtime["dashboard_fps"],
                         "batch_size": runtime["batch_size"],
-                        "device": device,
+                        "device": device_desc,
+                        "performance_profile": runtime["performance_profile"],
                         "target_fps": runtime["target_fps"],
                         "path_video_every_n_frames": runtime["path_video_every_n_frames"],
                         "path_video_fps": runtime["path_video_fps"],
@@ -1482,19 +1689,21 @@ def main():
                         }
 
                 total_detected_people = 0
-                for frame_batch in chunked(prepared_frames, int(runtime["batch_size"])):
+                inference_tasks = []
+                for batch_index, frame_batch in enumerate(chunked(prepared_frames, int(runtime["batch_size"]))):
                     if not frame_batch:
                         continue
+                    worker = inference_workers[batch_index % len(inference_workers)]
+                    frames = [item["frame"] for item in frame_batch]
+                    if inference_executor is not None:
+                        task = inference_executor.submit(run_yolo_inference, worker, frames, confidence, classes)
+                        inference_tasks.append((frame_batch, task, None))
+                    else:
+                        results_batch = run_yolo_inference(worker, frames, confidence, classes)
+                        inference_tasks.append((frame_batch, None, results_batch))
 
-                    results_batch = model(
-                        [item["frame"] for item in frame_batch],
-                        conf=confidence,
-                        classes=classes,
-                        verbose=False,
-                        device=device,
-                        half=(device == "cuda"),
-                    )
-
+                for frame_batch, task, direct_results in inference_tasks:
+                    results_batch = direct_results if task is None else task.result()
                     for item, results in zip(frame_batch, results_batch):
                         cam_id = item["id"]
                         render_frame = item["render_frame"]
@@ -1607,6 +1816,8 @@ def main():
 
                                 if marker_id not in history:
                                     history[marker_id] = {
+                                        "display_marker_id": emp.get("id", marker_id),
+                                        "opencv_marker_id": marker_id,
                                         "name": emp["name"],
                                         "dept": emp["dept"],
                                         "pos_buffer": deque(maxlen=5),
@@ -1625,10 +1836,11 @@ def main():
                                         "person_conf": matched_person["confidence"],
                                         "camera_times": {},
                                         "status_times": {"WALKING": 0.0, "WORKING": 0.0},
-                                        "path_view": recording_view_path(marker_id, emp["name"], cam_id),
+                                        "path_view": recording_view_path(emp.get("id", marker_id), emp["name"], cam_id),
                                         "cam_id": cam_id,
                                         "track_id": matched_person.get("track_id"),
                                         "last_bbox": matched_person["bbox"],
+                                        "last_feature": matched_person.get("feature"),
                                         "last_visual_frame": -1,
                                         "tracking_mode": "aruco",
                                         "last_work_motion_ts": now_ts,
@@ -1656,8 +1868,10 @@ def main():
                                     worker_state["person_conf"] = matched_person["confidence"]
                                     worker_state["status"] = "WORKING"
                                     worker_state["distance_method"] = calibration.get("method", "legacy_video_pixels")
-                                    worker_state["path_view"] = recording_view_path(marker_id, worker_state["name"], cam_id)
+                                    worker_state["path_view"] = recording_view_path(worker_state.get("display_marker_id", marker_id), worker_state["name"], cam_id)
                                     worker_state["last_bbox"] = matched_person["bbox"]
+                                    if matched_person.get("feature") is not None:
+                                        worker_state["last_feature"] = matched_person.get("feature")
                                     worker_state["tracking_mode"] = "aruco"
                                     worker_state["last_visual_frame"] = loop_counter
                                     worker_state["zone_id"] = worker_zone.get("id") if worker_zone else "unknown"
@@ -1669,8 +1883,10 @@ def main():
                                 worker_state["last_marker_seen_ts"] = now_ts
                                 worker_state["person_conf"] = matched_person["confidence"]
                                 worker_state["track_id"] = matched_person.get("track_id")
-                                worker_state["path_view"] = recording_view_path(marker_id, worker_state["name"], cam_id)
+                                worker_state["path_view"] = recording_view_path(worker_state.get("display_marker_id", marker_id), worker_state["name"], cam_id)
                                 worker_state["last_bbox"] = matched_person["bbox"]
+                                if matched_person.get("feature") is not None:
+                                    worker_state["last_feature"] = matched_person.get("feature")
                                 worker_state["tracking_mode"] = "aruco"
                                 worker_state["last_visual_frame"] = loop_counter
                                 worker_state["zone_id"] = worker_zone.get("id") if worker_zone else "unknown"
@@ -1737,18 +1953,22 @@ def main():
                             if matched_person is None:
                                 if marker_age > runtime["marker_hidden_max_seconds"]:
                                     continue
-                                if marker_age > runtime["marker_hidden_grace_seconds"]:
-                                    continue
+                                continuation_radius = runtime["marker_hidden_match_radius_px"] + min(180.0, marker_age * 10.0)
                                 matched_person = find_continuation_person(
                                     worker_state,
                                     person_boxes,
                                     used_person_box_ids,
-                                    runtime["marker_hidden_match_radius_px"],
+                                    continuation_radius,
                                     runtime["marker_hidden_min_iou"],
                                 )
                                 tracking_mode = "marker_hidden"
                             if matched_person is None:
                                 continue
+
+                            if matched_person.get("track_id") is not None:
+                                person_tracker.bind_employee(cam_id, matched_person["track_id"], marker_id)
+                                matched_person["employee_marker_id"] = marker_id
+                                matched_person["global_id"] = f"emp_{marker_id}"
 
                             floor_pos = person_floor_point(matched_person)
                             calibration = distance_calibrations.get(cam_id, {})
@@ -1758,8 +1978,10 @@ def main():
                             worker_state["last_seen_ts"] = now_ts
                             worker_state["person_conf"] = min(worker_state.get("person_conf", 0.0), matched_person["confidence"])
                             worker_state["track_id"] = matched_person.get("track_id")
-                            worker_state["path_view"] = recording_view_path(marker_id, worker_state["name"], cam_id)
+                            worker_state["path_view"] = recording_view_path(worker_state.get("display_marker_id", marker_id), worker_state["name"], cam_id)
                             worker_state["last_bbox"] = matched_person["bbox"]
+                            if matched_person.get("feature") is not None:
+                                worker_state["last_feature"] = matched_person.get("feature")
                             worker_state["tracking_mode"] = tracking_mode
                             worker_state["last_visual_frame"] = loop_counter
                             worker_state["zone_id"] = worker_zone.get("id") if worker_zone else "unknown"
@@ -1852,6 +2074,9 @@ def main():
 
                         frame_data["cameras"].append({
                             "id": cam_id,
+                            "label": getattr(active_cameras.get(cam_id), "label", cam_id),
+                            "zone": getattr(active_cameras.get(cam_id), "zone", ""),
+                            "role": getattr(active_cameras.get(cam_id), "role", ""),
                             "person_count": person_count,
                             "live_view": live_path,
                             "view_ts": round(last_dashboard_save_ts.get(cam_id, 0.0), 3),
@@ -1864,6 +2089,9 @@ def main():
                     if cam.id not in reported_camera_ids:
                         frame_data["cameras"].append({
                             "id": cam.id,
+                            "label": getattr(cam, "label", cam.id),
+                            "zone": getattr(cam, "zone", ""),
+                            "role": getattr(cam, "role", ""),
                             "person_count": 0,
                             "live_view": f"outputs/live/{cam.id}.jpg",
                             "view_ts": round(last_dashboard_save_ts.get(cam.id, 0.0), 3),
@@ -1875,19 +2103,22 @@ def main():
                 for mid, state in history.items():
                     account_worker_time(state, now_ts, runtime["marker_stale_after_seconds"])
                     current_cam = state.get("cam_id", "unknown")
+                    visible_this_loop = state.get("last_visual_frame") == loop_counter
+                    state["visible_now"] = visible_this_loop
                     state["path"] = state.get("camera_paths", {}).get(current_cam, state.get("path", []))
-                    state["path_view"] = recording_view_path(mid, state["name"], current_cam)
+                    display_marker_id = state.get("display_marker_id", mid)
+                    state["path_view"] = recording_view_path(display_marker_id, state["name"], current_cam)
                     employee_record = build_employee_record(mid, state, now_ts)
                     employee_records.append(employee_record)
 
-                    if loop_counter % runtime["path_video_every_n_frames"] == 0:
+                    if visible_this_loop and loop_counter % runtime["path_video_every_n_frames"] == 0:
                         target_frame = last_render_frames.get(current_cam)
                     else:
                         target_frame = None
 
                     if target_frame is not None:
                         path_frame = target_frame.copy()
-                        if state["path"] and state.get("last_visual_frame") == loop_counter:
+                        if state["path"]:
                             pts = np.array(state["path"], np.int32).reshape((-1, 1, 2))
                             cv2.polylines(path_frame, [pts], False, (0, 255, 255), 3)
                             cv2.circle(path_frame, tuple(pts[-1][0]), 8, (0, 0, 255), -1)
@@ -1901,7 +2132,7 @@ def main():
                             2,
                         )
                         path_frame, _ = resize_to_width(path_frame, runtime["dashboard_image_width"])
-                        path_video_recorder.write(recording_disk_path(mid, state["name"], current_cam), path_frame)
+                        path_video_recorder.write(recording_disk_path(display_marker_id, state["name"], current_cam), path_frame)
 
                     frame_data["stats"].append(employee_record)
 
@@ -1911,8 +2142,9 @@ def main():
                         "timestamp": frame_data["timestamp"],
                         "employees": employee_records,
                     }, f, indent=2)
-                with open("logs/live_stats.json", "w") as f:
-                    json.dump(frame_data, f, indent=2)
+                for live_stats_path in {runtime["live_stats_file"], runtime["dashboard_live_stats_file"]}:
+                    with open(live_stats_path, "w") as f:
+                        json.dump(frame_data, f, indent=2)
 
                 elapsed = time.time() - loop_started
                 time.sleep(max(0.0, loop_interval - elapsed))

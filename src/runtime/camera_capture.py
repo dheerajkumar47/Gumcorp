@@ -8,6 +8,9 @@ import cv2
 import numpy as np
 
 
+_OPEN_CAPTURE_SEMAPHORE = threading.Semaphore(1)
+
+
 class ThreadedCamera:
     """Continuously read the latest frame from one camera without blocking inference."""
 
@@ -50,6 +53,7 @@ class ThreadedCamera:
         self._reconnects = 0
         self._last_error = ""
         self._last_open_attempt_ts = 0.0
+        self._opened_ts = 0.0
         self._running = False
         self._thread = None
 
@@ -111,7 +115,8 @@ class ThreadedCamera:
             self._cap.release()
 
         self.video_path = self._current_source()
-        self._cap = cv2.VideoCapture(self.video_path, cv2.CAP_FFMPEG)
+        with _OPEN_CAPTURE_SEMAPHORE:
+            self._cap = cv2.VideoCapture(self.video_path, cv2.CAP_FFMPEG)
         self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         if self.width:
             self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
@@ -123,6 +128,8 @@ class ThreadedCamera:
             self._cap.set(cv2.CAP_PROP_POS_MSEC, self._start_offset_seconds * 1000.0)
         self._err_count = 0
         self._reconnects += 1
+        self._opened_ts = time.time()
+        time.sleep(0.35)
 
     def _reader(self) -> None:
         while self._running:
@@ -135,10 +142,15 @@ class ThreadedCamera:
                 time.sleep(0.2)
                 continue
 
-            if self._read_ts and time.time() - self._read_ts > self.stale_after_seconds:
+            now = time.time()
+            if (
+                self._read_ts
+                and now - self._read_ts > self.stale_after_seconds
+                and now - self._opened_ts > self.stale_after_seconds
+            ):
                 self._last_error = "stale_frame_reconnect"
                 self._open_capture()
-                time.sleep(0.2)
+                time.sleep(self.reconnect_interval_seconds)
                 continue
 
             ret, frame = self._cap.read()

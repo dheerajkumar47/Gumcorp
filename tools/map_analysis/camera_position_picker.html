@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Camera Position Picker</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #eef2ee;
+      color: #17221a;
+    }
+    .shell {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      min-height: 100vh;
+    }
+    aside {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow: auto;
+      padding: 14px;
+      background: #f8fbf6;
+      border-right: 1px solid #cbd8c8;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 18px;
+    }
+    .hint {
+      margin-bottom: 12px;
+      color: #566257;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    label {
+      display: block;
+      margin: 10px 0 4px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #465346;
+      text-transform: uppercase;
+    }
+    select, input, textarea, button {
+      width: 100%;
+      border: 1px solid #b9c8b6;
+      border-radius: 6px;
+      padding: 8px;
+      font: inherit;
+      background: #fff;
+    }
+    textarea {
+      height: 260px;
+      resize: vertical;
+      white-space: pre;
+      font-family: Consolas, monospace;
+      font-size: 12px;
+    }
+    button {
+      margin-top: 8px;
+      cursor: pointer;
+      background: #1b7f52;
+      color: #fff;
+      border-color: #1b7f52;
+      font-weight: 700;
+    }
+    button.secondary {
+      background: #fff;
+      color: #1b7f52;
+    }
+    .canvas-wrap {
+      padding: 14px;
+      overflow: auto;
+    }
+    .map-stage {
+      position: relative;
+      display: inline-block;
+      background: #fff;
+      border: 1px solid #cbd8c8;
+    }
+    #map {
+      display: block;
+      max-width: none;
+      user-select: none;
+      cursor: crosshair;
+    }
+    .marker {
+      position: absolute;
+      width: 22px;
+      height: 22px;
+      margin-left: -11px;
+      margin-top: -11px;
+      border-radius: 50%;
+      border: 3px solid #063;
+      background: #ffcc00;
+      color: #111;
+      font-size: 10px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      box-shadow: 0 0 0 2px #fff;
+    }
+    .coord {
+      margin-top: 8px;
+      padding: 8px;
+      background: #edf5ea;
+      border: 1px solid #cbd8c8;
+      border-radius: 6px;
+      font-family: Consolas, monospace;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <h1>Camera Position Picker</h1>
+      <div class="hint">
+        Select a camera, click its physical mounted position on the map, then copy the output.
+        Use browser zoom if needed. Coordinates are original image pixels.
+      </div>
+
+      <label for="camera-id">Camera</label>
+      <select id="camera-id">
+        <option value="d45">d45 | sheetline 2</option>
+        <option value="d46">d46 | pallet line 2</option>
+        <option value="d47">d47 | main production 2</option>
+        <option value="d48">d48 | inside sheetline</option>
+      </select>
+
+      <label for="custom-label">Optional label/note</label>
+      <input id="custom-label" placeholder="camera height / facing direction">
+
+      <div class="coord" id="cursor">cursor: x -, y -</div>
+      <div class="coord" id="last">last: none</div>
+
+      <button id="undo" class="secondary">Undo Last</button>
+      <button id="clear" class="secondary">Clear</button>
+      <button id="copy">Copy Output</button>
+
+      <label for="output">Output</label>
+      <textarea id="output" readonly></textarea>
+    </aside>
+
+    <main class="canvas-wrap">
+      <div class="map-stage" id="stage">
+        <img id="map" src="../../docs/rev03_page1.png" alt="Factory map">
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const points = [];
+    const map = document.getElementById("map");
+    const stage = document.getElementById("stage");
+    const cameraId = document.getElementById("camera-id");
+    const customLabel = document.getElementById("custom-label");
+    const output = document.getElementById("output");
+    const cursor = document.getElementById("cursor");
+    const last = document.getElementById("last");
+
+    function imagePoint(event) {
+      const rect = map.getBoundingClientRect();
+      const sx = map.naturalWidth / rect.width;
+      const sy = map.naturalHeight / rect.height;
+      return {
+        x: Math.round((event.clientX - rect.left) * sx),
+        y: Math.round((event.clientY - rect.top) * sy),
+        displayX: event.clientX - rect.left,
+        displayY: event.clientY - rect.top,
+      };
+    }
+
+    function render() {
+      stage.querySelectorAll(".marker").forEach((node) => node.remove());
+      const rect = map.getBoundingClientRect();
+      const sx = rect.width / map.naturalWidth;
+      const sy = rect.height / map.naturalHeight;
+      points.forEach((point) => {
+        const marker = document.createElement("div");
+        marker.className = "marker";
+        marker.style.left = `${point.x * sx}px`;
+        marker.style.top = `${point.y * sy}px`;
+        marker.textContent = point.id.replace("d", "");
+        stage.appendChild(marker);
+      });
+
+      output.value = points.map((point) => {
+        const note = point.note ? ` # ${point.note}` : "";
+        return `- {point: [${point.x}, ${point.y}], id: ${point.id}}${note}`;
+      }).join("\n");
+    }
+
+    map.addEventListener("mousemove", (event) => {
+      const p = imagePoint(event);
+      cursor.textContent = `cursor: x ${p.x}, y ${p.y}`;
+    });
+
+    map.addEventListener("click", (event) => {
+      const p = imagePoint(event);
+      const id = cameraId.value;
+      const existing = points.findIndex((point) => point.id === id);
+      const item = { id, x: p.x, y: p.y, note: customLabel.value.trim() };
+      if (existing >= 0) {
+        points[existing] = item;
+      } else {
+        points.push(item);
+      }
+      last.textContent = `last: ${id} = x ${p.x}, y ${p.y}`;
+      render();
+    });
+
+    document.getElementById("undo").addEventListener("click", () => {
+      points.pop();
+      render();
+    });
+
+    document.getElementById("clear").addEventListener("click", () => {
+      points.length = 0;
+      last.textContent = "last: none";
+      render();
+    });
+
+    document.getElementById("copy").addEventListener("click", async () => {
+      await navigator.clipboard.writeText(output.value);
+    });
+
+    window.addEventListener("resize", render);
+  </script>
+</body>
+</html>

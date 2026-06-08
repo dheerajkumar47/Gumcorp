@@ -1,51 +1,51 @@
-marker_id,name,department
-0,Faisal Saleem,IT
-1,Muhammad Salman,IT
-2,Sara,Quality Control
-3,Usman,Maintenance
-4,Ayesha,HR
-5,Hassan,Packing
-6,Faizan,Machine Operator
-7,Imran,Production
-8,Sana,Quality Control
-9,Abdullah,Assembly
-10,Employee_10,Quality
-11,Employee_11,Packing
-12,Employee_12,Production
-13,Employee_13,Assembly
-14,Employee_14,Quality
-15,Employee_15,Packing
-16,Employee_16,Production
-17,Employee_17,Assembly
-18,Employee_18,Quality
-19,Employee_19,Packing
-20,Employee_20,Production
-21,Employee_21,Assembly
-22,Employee_22,Quality
-23,Employee_23,Packing
-24,Employee_24,Production
-25,Employee_25,Assembly
-26,Employee_26,Quality
-27,Employee_27,Packing
-28,Employee_28,Production
-29,Employee_29,Assembly
-30,Employee_30,Quality
-31,Employee_31,Packing
-32,Employee_32,Production
-33,Employee_33,Assembly
-34,Employee_34,Quality
-35,Employee_35,Packing
-36,Employee_36,Production
-37,Employee_37,Assembly
-38,Employee_38,Quality
-39,Employee_39,Packing
-40,Employee_40,Production
-41,Employee_41,Assembly
-42,Employee_42,Quality
-43,Employee_43,Packing
-44,Employee_44,Production
-45,Employee_45,Assembly
-46,Employee_46,Quality
-47,Employee_47,Packing
-48,Employee_48,Production
-49,Employee_49,Assembly
+marker_id,opencv_marker_id,name,department,employee_code,designation,shift,active
+1,0,Marker_01_Unassigned,Unassigned,,,,no
+2,1,Marker_02_Unassigned,Unassigned,,,,no
+3,2,Marker_03_Unassigned,Unassigned,,,,no
+4,3,Marker_04_Unassigned,Unassigned,,,,no
+5,4,Marker_05_Unassigned,Unassigned,,,,no
+6,5,Fazal Hussain,Production,1015,Paking Man,A,yes
+7,6,M.Hashim,Production,D.W,Helper,A,yes
+8,7,Marker_08_Unassigned,Unassigned,,,,no
+9,8,Fida,Production,1186,Paking Man,B,yes
+10,9,Karimdad,Production,1268,Helper,B,yes
+11,10,Marker_11_Unassigned,Unassigned,,,,no
+12,11,Rizwan Ali,Production,1194,Paking Man,A,yes
+13,12,Sameer,Production,D.W,Helper,B,yes
+14,13,Namutullah,Production,D.W,Helper,,yes
+15,14,Irashad Ali,Production,D.W,Helper,A,yes
+16,15,Ali Akbar,Production,1013,Sheet Line Oprator,A,yes
+17,16,Marker_17_Unassigned,Unassigned,,,,no
+18,17,Marker_18_Unassigned,Unassigned,,,,no
+19,18,Marker_19_Unassigned,Unassigned,,,,no
+20,19,Marker_20_Unassigned,Unassigned,,,,no
+21,20,Amjad Ali,Production,D.W,Helper,B,yes
+22,21,Marker_22_Unassigned,Unassigned,,,,no
+23,22,Waqas Ali,House Keeping,1306,Cleaner,A,yes
+24,23,Zohaib Ali,Cleaning,D.W,House Keeping,A,yes
+25,24,Mamtaz Ali,Production,1284,Helper,B,yes
+26,25,Zaid Ali 1,Poping Candy,D.W,Helper,A,yes
+27,26,Marker_27_Unassigned,Unassigned,,,,no
+28,27,Marker_28_Unassigned,Unassigned,,,,no
+29,28,Marker_29_Unassigned,Unassigned,,,,no
+30,29,Iqbal,Production,1117,Paking Man,B,yes
+31,30,Marker_31_Unassigned,Unassigned,,,,no
+32,31,Parvaiz Ahmed,Production,1121,Machine Operator,A,yes
+33,32,Marker_33_Unassigned,Unassigned,,,,no
+34,33,Marker_34_Unassigned,Unassigned,,,,no
+35,34,Marker_35_Unassigned,Unassigned,,,,no
+36,35,Marker_36_Unassigned,Unassigned,,,,no
+37,36,Marker_37_Unassigned,Unassigned,,,,no
+38,37,Marker_38_Unassigned,Unassigned,,,,no
+39,38,Saleem,Production,1076,Sheet Line Oprator,,yes
+40,39,Marker_40_Unassigned,Unassigned,,,,no
+41,40,Marker_41_Unassigned,Unassigned,,,,no
+42,41,Marker_42_Unassigned,Unassigned,,,,no
+43,42,Marker_43_Unassigned,Unassigned,,,,no
+44,43,Gulam Qadir,Production,1018,Helper,A,yes
+45,44,Marker_45_Unassigned,Unassigned,,,,no
+46,45,Marker_46_Unassigned,Unassigned,,,,no
+47,46,Marker_47_Unassigned,Unassigned,,,,no
+48,47,Marker_48_Unassigned,Unassigned,,,,no
+49,48,Muharum,Production,1024,Helper,A,yes
+50,49,Wajahat Gul,Production,1201,Helper,A,yes

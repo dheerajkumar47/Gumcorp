@@ -52,6 +52,10 @@ points:
   point_38: [2670, 657]
   point_39: [2668, 1156]
   point_40: [2996, 1169]
+  point_41: [3288, 1144]
+  point_42: [3291, 1171]
+  point_43: [2985, 928]
+  point_44: [3318, 1054]
 
 doorways:
   - {from: point_01, to: point_02, label: main_entrance_01_main_exit_01}
@@ -105,6 +109,10 @@ cameras:
   - {point: point_27, id: sheetline}
   - {point: point_35, id: cooling_room2}
   - {point: point_40, id: main_production}
+  - {point: point_41, id: d45, label: sheetline 2, direction: towards sheet line}
+  - {point: point_42, id: d46, label: pallet line 2, direction: towards pallet line}
+  - {point: point_43, id: d47, label: main production 2, direction: outside cooling room gate near main production pillar}
+  - {point: point_44, id: d48, label: inside sheetline, direction: inside sheetline wall}
 
 camera_coverage_estimates:
   - id: sheetline

@@ -72,6 +72,17 @@ const DashboardApp = (() => {
         return (state.data.cameras || []).filter(cameraOnline);
     }
 
+    function registryCamera(cameraOrId) {
+        const id = typeof cameraOrId === "string" ? cameraOrId : cameraOrId?.id;
+        if (!id) return null;
+        return (state.registry.cameras || []).find((camera) => camera.id === id) || null;
+    }
+
+    function cameraDisplayName(camera) {
+        const registryItem = registryCamera(camera);
+        return registryItem?.label || camera?.label || camera?.id || "Unknown camera";
+    }
+
     function getEmployees() {
         return state.data.stats || [];
     }
@@ -120,9 +131,7 @@ const DashboardApp = (() => {
                 acceleration: {},
             };
         }
-        if (state.page === "cameras") {
-            await loadRegistry();
-        }
+        await loadRegistry();
         reconcileSelection();
         render();
     }
@@ -364,12 +373,12 @@ const DashboardApp = (() => {
                 const stateInfo = cameraState(selectedCamera);
                 if (!cameraOnline(selectedCamera)) {
                     liveStage.innerHTML = `<div class="live-placeholder">${escapeHtml(selectedCamera.stream_status?.last_error || "no live frame")}</div>`;
-                    setText("overview-live-name", selectedCamera.id);
+                    setText("overview-live-name", cameraDisplayName(selectedCamera));
                     setText("overview-live-meta", selectedCamera.stream_status?.last_error || "Camera unavailable");
                     setHtml("overview-live-badge", `<span class="pill ${stateInfo.tone}">${stateInfo.label}</span>`);
                 } else {
-                    liveStage.innerHTML = `<img src="${streamUrl(selectedCamera.live_view)}" alt="${escapeHtml(selectedCamera.id)}">`;
-                    setText("overview-live-name", selectedCamera.id);
+                    liveStage.innerHTML = `<img src="${streamUrl(selectedCamera.live_view)}" alt="${escapeHtml(cameraDisplayName(selectedCamera))}">`;
+                    setText("overview-live-name", cameraDisplayName(selectedCamera));
                     setText("overview-live-meta", `${selectedCamera.person_count || 0} people detected`);
                     setHtml("overview-live-badge", `<span class="pill ${stateInfo.tone}">${stateInfo.label}</span>`);
                 }
@@ -410,7 +419,7 @@ const DashboardApp = (() => {
                             <div class="camera-meta">
                                 <div class="camera-top">
                                     <div>
-                                        <div class="camera-name">${escapeHtml(camera.id)}</div>
+                                        <div class="camera-name">${escapeHtml(cameraDisplayName(camera))}</div>
                                         <div class="meta-sub">${escapeHtml(camera.stream_status?.last_error || "live frame ok")}</div>
                                     </div>
                                     <span class="pill ${stateInfo.tone}">${stateInfo.label}</span>
@@ -433,7 +442,7 @@ const DashboardApp = (() => {
         });
         cameras.forEach((camera) => {
             if (!cameraOnline(camera)) {
-                alerts.push({ tone: "bad", text: `${camera.id} camera feed unavailable` });
+                alerts.push({ tone: "bad", text: `${cameraDisplayName(camera)} camera feed unavailable` });
             }
         });
         setHtml(
@@ -578,13 +587,13 @@ const DashboardApp = (() => {
                     ? cameras.map((camera) => `
                         <div class="camera-card" data-camera-id="${escapeHtml(camera.id)}">
                             <div class="camera-frame">
-                                <img data-live-img="${escapeHtml(camera.id)}" data-live-slot="card-${escapeHtml(camera.id)}" alt="${escapeHtml(camera.id)}" style="visibility:hidden">
+                                <img data-live-img="${escapeHtml(camera.id)}" data-live-slot="card-${escapeHtml(camera.id)}" alt="${escapeHtml(cameraDisplayName(camera))}" style="visibility:hidden">
                                 <div class="camera-frame offline" data-camera-placeholder="${escapeHtml(camera.id)}">Loading</div>
                             </div>
                             <div class="camera-meta">
                                 <div class="camera-top">
                                     <div>
-                                        <div class="camera-name">${escapeHtml(camera.id)}</div>
+                                        <div class="camera-name">${escapeHtml(cameraDisplayName(camera))}</div>
                                         <div class="meta-sub" data-camera-meta="${escapeHtml(camera.id)}">Waiting</div>
                                     </div>
                                     <span class="pill bad" data-camera-pill="${escapeHtml(camera.id)}">OFFLINE</span>
@@ -722,7 +731,7 @@ const DashboardApp = (() => {
                             <div class="record-meta">
                                 <div class="record-top">
                                     <div>
-                                        <div class="record-name">${escapeHtml(camera.id)}</div>
+                                        <div class="record-name">${escapeHtml(cameraDisplayName(camera))}</div>
                                         <div class="meta-sub">${escapeHtml(camera.stream_status?.last_error || "live frame ok")}</div>
                                     </div>
                                     <span class="pill ${stateInfo.tone}">${stateInfo.label}</span>

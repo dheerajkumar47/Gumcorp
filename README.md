@@ -84,3 +84,15 @@ Map analysis scripts:
 - Live dashboard output
 - Per-employee MP4 movement-trail recording
 - CPU/RAM/GPU telemetry in `logs/live_stats.json`
+
+
+
+
+  Not fully implemented yet:
+
+  - real YOLO pose skeleton/keypoints
+  - real OSNet/DeepSORT cross-camera ReID
+  - true multi-camera identity confidence scoring when same person appears in two cameras at same time
+  - perfect zone calibration per camera via homography anchor points
+  - strong object/material detection like box/pallet carrying
+  - production-grade activity classifier trained on your factory actions
