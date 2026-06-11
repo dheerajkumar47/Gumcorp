@@ -191,6 +191,7 @@ def get_runtime_config(config, args):
         "min_marker_area": float(runtime.get("min_marker_area", 80.0)),
         "employee_records_file": os.path.join(log_dir, "employee_records.json"),
         "camera_registry_file": args.camera_registry or runtime.get("camera_registry_file", "data/cameras.json"),
+        "debug_mode": bool(config.get("system", {}).get("debug", False)),
         "performance_profile": args.performance_profile or runtime.get("performance_profile", "balanced"),
     }
 
@@ -262,27 +263,27 @@ def apply_performance_profile(runtime):
         runtime["target_fps"] = min(runtime["target_fps"], 10.0)
         runtime["batch_size"] = max(runtime["batch_size"], 6)
         runtime["aruco_max_width"] = min(runtime["aruco_max_width"], 1280)
-        runtime["aruco_every_n_frames"] = max(runtime["aruco_every_n_frames"], 6)
-        runtime["aruco_workers"] = max(1, min(runtime["aruco_workers"], 2))
-        runtime["aruco_full_frame_fallback"] = False
+        runtime["aruco_every_n_frames"] = max(2, int(runtime["aruco_every_n_frames"]))
+        runtime["aruco_workers"] = max(2, min(runtime["aruco_workers"], 2))
         runtime["dashboard_image_width"] = min(runtime["dashboard_image_width"], 1280)
         runtime["dashboard_fps"] = min(runtime["dashboard_fps"], 4.0)
         runtime["jpeg_quality_live"] = max(75, min(runtime["jpeg_quality_live"], 82))
         runtime["stale_camera_after_seconds"] = max(runtime["stale_camera_after_seconds"], 45.0)
         runtime["reconnect_interval_seconds"] = max(runtime["reconnect_interval_seconds"], 15.0)
     elif profile == "speed":
-        runtime["inference_width"] = min(runtime["inference_width"], 960)
-        runtime["target_fps"] = min(runtime["target_fps"], 8.0)
+        runtime["inference_width"] = min(runtime["inference_width"], 1536)
+        runtime["target_fps"] = min(runtime["target_fps"], 12.0)
         runtime["batch_size"] = max(runtime["batch_size"], 8)
-        runtime["aruco_max_width"] = min(runtime["aruco_max_width"], 960)
-        runtime["aruco_every_n_frames"] = max(2, int(runtime["aruco_every_n_frames"] * 2))
-        runtime["aruco_workers"] = max(1, min(runtime["aruco_workers"], 2))
+        runtime["aruco_max_width"] = min(runtime["aruco_max_width"], 1280)
+        runtime["aruco_crop_zoom"] = max(runtime["aruco_crop_zoom"], 8.0)
+        runtime["aruco_every_n_frames"] = max(3, min(4, int(runtime["aruco_every_n_frames"])))
+        runtime["aruco_workers"] = max(2, min(runtime["aruco_workers"], 2))
         runtime["aruco_full_frame_fallback"] = False
-        runtime["dashboard_image_width"] = min(runtime["dashboard_image_width"], 640)
-        runtime["dashboard_fps"] = max(2, min(runtime["dashboard_fps"], 3))
-        runtime["jpeg_quality_live"] = min(runtime["jpeg_quality_live"], 55)
-        runtime["stale_camera_after_seconds"] = max(runtime["stale_camera_after_seconds"], 60.0)
-        runtime["reconnect_interval_seconds"] = max(runtime["reconnect_interval_seconds"], 20.0)
+        runtime["dashboard_image_width"] = min(runtime["dashboard_image_width"], 960)
+        runtime["dashboard_fps"] = min(runtime["dashboard_fps"], 8)
+        runtime["jpeg_quality_live"] = max(65, min(runtime["jpeg_quality_live"], 75))
+        runtime["stale_camera_after_seconds"] = max(runtime["stale_camera_after_seconds"], 30.0)
+        runtime["reconnect_interval_seconds"] = max(runtime["reconnect_interval_seconds"], 3.0)
     elif profile == "quality":
         runtime["inference_width"] = max(runtime["inference_width"], min(1920, int(runtime["inference_width"] * 1.25)))
         runtime["aruco_max_width"] = max(runtime["aruco_max_width"], 2560)
@@ -347,13 +348,21 @@ def resize_to_width(frame, max_width):
     return resized, scale
 
 def detect_aruco_markers(aruco_dict, frame, max_width):
-    aruco_frame, aruco_scale = resize_to_width(frame, max_width)
-    gray = cv2.cvtColor(aruco_frame, cv2.COLOR_BGR2GRAY)
-    detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_detector_params())
-    corners, ids = detect_markers_with_variants(detector, gray)
-    if corners is not None and aruco_scale != 1.0:
-        corners = tuple(corner * aruco_scale for corner in corners)
-    return corners, ids
+    try:
+        aruco_frame, aruco_scale = resize_to_width(frame, max_width)
+        gray = cv2.cvtColor(aruco_frame, cv2.COLOR_BGR2GRAY)
+        detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_detector_params())
+        corners, ids = detect_markers_with_variants(detector, gray)
+        if ids is not None:
+            print(f"[ARUCO FULL-FRAME] Found {len(ids)} markers: {ids.flatten().tolist()}")
+        else:
+            print("[ARUCO FULL-FRAME] No markers found")
+        if corners is not None and aruco_scale != 1.0:
+            corners = tuple(corner * aruco_scale for corner in corners)
+        return corners, ids
+    except Exception as e:
+        print(f"[ARUCO FULL-FRAME] Exception: {e}")
+        return None, None
 
 def aruco_detector_params():
     params = cv2.aruco.DetectorParameters()
@@ -372,6 +381,7 @@ def detect_markers_with_variants(detector, gray):
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     variants.append(clahe.apply(gray))
     variants.append(cv2.filter2D(gray, -1, np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)))
+    variants.append(cv2.GaussianBlur(gray, (5, 5), 0))
 
     seen = set()
     merged_corners = []
@@ -391,50 +401,107 @@ def detect_markers_with_variants(detector, gray):
         return None, None
     return tuple(merged_corners), np.array([[marker_id] for marker_id in merged_ids], dtype=np.int32)
 
-def detect_aruco_in_person_crops(aruco_dict, frame, person_boxes, zoom_scale, margin_ratio, min_marker_area):
+def detect_aruco_in_person_crops(aruco_dict, frame, person_boxes, zoom_scale, margin_ratio, min_marker_area, debug=False):
     if not person_boxes:
         return None, None, {}
     height, width = frame.shape[:2]
-    detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_detector_params())
+    try:
+        detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_detector_params())
+    except Exception:
+        return None, None, {}
     candidates = []
+    crop_detections_log = []
 
     for person_index, person in enumerate(person_boxes):
-        x1, y1, x2, y2 = person["bbox"]
-        box_w = max(1.0, x2 - x1)
-        box_h = max(1.0, y2 - y1)
-        pad_x = box_w * margin_ratio
-        pad_y = box_h * margin_ratio
-        cx1 = max(0, int(round(x1 - pad_x)))
-        cy1 = max(0, int(round(y1 - pad_y)))
-        cx2 = min(width, int(round(x2 + pad_x)))
-        cy2 = min(height, int(round(y2 + pad_y)))
-        if cx2 - cx1 < 20 or cy2 - cy1 < 30:
-            continue
-
-        crop = frame[cy1:cy2, cx1:cx2]
-        if crop.size == 0:
-            continue
-        zoom = cv2.resize(crop, None, fx=zoom_scale, fy=zoom_scale, interpolation=cv2.INTER_CUBIC)
-        gray = cv2.cvtColor(zoom, cv2.COLOR_BGR2GRAY)
-        crop_corners, crop_ids = detect_markers_with_variants(detector, gray)
-        if crop_ids is None:
-            continue
-
-        for marker_id, marker_corners in zip(crop_ids.flatten(), crop_corners):
-            pts_zoom = marker_corners[0].astype(np.float32)
-            area = float(cv2.contourArea(pts_zoom)) / (zoom_scale * zoom_scale)
-            if area < min_marker_area:
+        try:
+            x1, y1, x2, y2 = person["bbox"]
+            box_w = max(1.0, x2 - x1)
+            box_h = max(1.0, y2 - y1)
+            pad_x = box_w * margin_ratio
+            pad_y = box_h * margin_ratio
+            cx1 = max(0, int(round(x1 - pad_x)))
+            cy1 = max(0, int(round(y1 - pad_y)))
+            cx2 = min(width, int(round(x2 + pad_x)))
+            cy2 = min(height, int(round(y2 + pad_y)))
+            if cx2 - cx1 < 20 or cy2 - cy1 < 30:
                 continue
-            pts_full = (pts_zoom / zoom_scale) + np.array([cx1, cy1], dtype=np.float32)
-            marker_center = pts_full.mean(axis=0)
-            inside_score = 1.0 if expanded_contains(person["bbox"], marker_center, 0.0) else 0.0
-            candidates.append({
-                "marker_id": int(marker_id),
-                "corners": pts_full,
-                "person": person,
-                "person_index": person_index,
-                "score": (inside_score * 100000.0) + area - bbox_area(person["bbox"]) * 0.0001,
-            })
+
+            crop = frame[cy1:cy2, cx1:cx2]
+            if crop.size == 0:
+                continue
+            zoom = cv2.resize(crop, None, fx=zoom_scale, fy=zoom_scale, interpolation=cv2.INTER_CUBIC)
+            gray = cv2.cvtColor(zoom, cv2.COLOR_BGR2GRAY)
+            crop_corners, crop_ids = detect_markers_with_variants(detector, gray)
+            if crop_ids is None:
+                crop_detections_log.append(f"Person {person_index}: no markers")
+                continue
+            
+            crop_detections_log.append(f"Person {person_index}: found {len(crop_ids)} markers: {crop_ids.flatten().tolist()}")
+
+            for marker_id, marker_corners in zip(crop_ids.flatten(), crop_corners):
+                pts_zoom = marker_corners[0].astype(np.float32)
+                area = float(cv2.contourArea(pts_zoom)) / (zoom_scale * zoom_scale)
+                if area < min_marker_area:
+                    crop_detections_log.append(f"  Marker {marker_id}: area={area:.1f} < threshold={min_marker_area} (FILTERED)")
+                    continue
+                pts_full = (pts_zoom / zoom_scale) + np.array([cx1, cy1], dtype=np.float32)
+                if not marker_quality_ok(pts_full, person["bbox"], min_side_px=8.0):
+                    crop_detections_log.append(f"  Marker {marker_id}: failed marker geometry/body-position check (FILTERED)")
+                    continue
+                marker_center = pts_full.mean(axis=0)
+                if not expanded_contains(person["bbox"], marker_center, 0.0):
+                    crop_detections_log.append(f"  Marker {marker_id}: center outside person box (FILTERED)")
+                    continue
+                inside_score = 1.0 if expanded_contains(person["bbox"], marker_center, 0.0) else 0.0
+                candidates.append({
+                    "marker_id": int(marker_id),
+                    "corners": pts_full,
+                    "person": person,
+                    "person_index": person_index,
+                    "score": (inside_score * 100000.0) + area - bbox_area(person["bbox"]) * 0.0001,
+                })
+                crop_detections_log.append(f"  Marker {marker_id}: area={area:.1f} (OK)")
+        except Exception as e:
+            crop_detections_log.append(f"Person {person_index}: exception {e}")
+            continue
+
+    if not candidates:
+        try:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            full_corners, full_ids = detect_markers_with_variants(detector, gray)
+            if full_ids is not None:
+                for marker_id, marker_corners in zip(full_ids.flatten(), full_corners):
+                    pts_full = marker_corners[0].astype(np.float32)
+                    area = marker_area(pts_full)
+                    if area < min_marker_area:
+                        continue
+                    marker_center = pts_full.mean(axis=0)
+                    matched_person = find_person_for_marker(marker_center, person_boxes, 0.0)
+                    if matched_person is None:
+                        continue
+                    if not expanded_contains(matched_person["bbox"], marker_center, 0.0):
+                        continue
+                    if not marker_quality_ok(pts_full, matched_person["bbox"], min_side_px=8.0):
+                        continue
+                    matched_index = next(
+                        (idx for idx, person in enumerate(person_boxes) if person is matched_person),
+                        -1,
+                    )
+                    candidates.append({
+                        "marker_id": int(marker_id),
+                        "corners": pts_full,
+                        "person": matched_person,
+                        "person_index": matched_index,
+                        "score": 90000.0 + area - bbox_area(matched_person["bbox"]) * 0.0001,
+                    })
+                    crop_detections_log.append(
+                        f"Full-frame assist: marker {int(marker_id)} matched inside person box area={area:.1f}"
+                    )
+        except Exception as e:
+            crop_detections_log.append(f"Full-frame assist exception {e}")
+
+    if debug and crop_detections_log:
+        print("[ARUCO CROPS] " + " | ".join(crop_detections_log))
 
     if not candidates:
         return None, None, {}
@@ -489,6 +556,19 @@ def scale_person_boxes(results, scale):
         x1, y1, x2, y2 = [float(v * scale) for v in box]
         boxes.append({"bbox": (x1, y1, x2, y2), "confidence": float(conf)})
     return boxes
+
+
+def build_supervision_detections(person_boxes):
+    if sv is None:
+        return None
+    if not person_boxes:
+        return sv.Detections(xyxy=np.zeros((0, 4), dtype=np.float32), confidence=np.zeros((0,), dtype=np.float32), class_id=np.zeros((0,), dtype=np.int32))
+
+    xyxy = np.array([person["bbox"] for person in person_boxes], dtype=np.float32)
+    confidence = np.array([person.get("confidence", 0.0) for person in person_boxes], dtype=np.float32)
+    class_id = np.zeros((len(person_boxes),), dtype=np.int32)
+    return sv.Detections(xyxy=xyxy, confidence=confidence, class_id=class_id)
+
 
 def polygon_area(points):
     pts = np.array(points, dtype=np.float32)
@@ -639,6 +719,37 @@ def expanded_contains(box, point, margin_ratio):
 def marker_area(corners):
     return float(cv2.contourArea(corners.astype(np.float32)))
 
+def marker_quality_ok(corners, person_bbox=None, min_side_px=8.0):
+    pts = np.asarray(corners, dtype=np.float32).reshape(-1, 2)
+    if pts.shape[0] != 4:
+        return False
+    sides = np.array([
+        np.linalg.norm(pts[(idx + 1) % 4] - pts[idx])
+        for idx in range(4)
+    ], dtype=np.float32)
+    min_side = float(np.min(sides))
+    max_side = float(np.max(sides))
+    if min_side < min_side_px:
+        return False
+    if max_side / max(1.0, min_side) > 2.25:
+        return False
+    area = marker_area(pts)
+    square_ratio = area / max(1.0, float(np.mean(sides) ** 2))
+    if square_ratio < 0.30 or square_ratio > 1.55:
+        return False
+    if person_bbox is not None:
+        x1, y1, x2, y2 = person_bbox
+        marker_center = pts.mean(axis=0)
+        person_w = max(1.0, x2 - x1)
+        person_h = max(1.0, y2 - y1)
+        rel_x = (marker_center[0] - x1) / person_w
+        rel_y = (marker_center[1] - y1) / person_h
+        if rel_x < -0.02 or rel_x > 1.02:
+            return False
+        if rel_y < 0.03 or rel_y > 0.78:
+            return False
+    return True
+
 def bbox_center(box):
     x1, y1, x2, y2 = box
     return np.array([(x1 + x2) / 2.0, (y1 + y2) / 2.0], dtype=np.float32)
@@ -684,7 +795,16 @@ def person_appearance_feature(frame, bbox):
         return None
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
     hist = cv2.calcHist([hsv], [0, 1], None, [16, 16], [0, 180, 0, 256])
-    feature = cv2.normalize(hist, None).flatten().astype(np.float32)
+    hist = cv2.normalize(hist, None).flatten().astype(np.float32)
+    upper = upper_body_patch(frame, bbox)
+    if upper is not None:
+        hist_upper = cv2.calcHist([upper], [0], None, [32], [0, 256])
+        hist_upper = cv2.normalize(hist_upper, None).flatten().astype(np.float32)
+        patch = cv2.resize(upper, (16, 16), interpolation=cv2.INTER_AREA)
+        patch_feat = (patch.flatten().astype(np.float32) / 255.0)
+        feature = np.concatenate((hist, hist_upper, patch_feat))
+    else:
+        feature = hist
     norm = float(np.linalg.norm(feature))
     if norm <= 1e-6:
         return None
@@ -798,12 +918,18 @@ class ByteTrackStyleTracker:
 
         byte_tracker = self._byte_tracker(cam_id)
         if byte_tracker is not None and detections:
-            xyxy = np.array([det["bbox"] for det in detections], dtype=np.float32)
-            confidence = np.array([det.get("confidence", 0.0) for det in detections], dtype=np.float32)
-            class_id = np.zeros(len(detections), dtype=int)
-            sv_detections = sv.Detections(xyxy=xyxy, confidence=confidence, class_id=class_id)
-            tracked = byte_tracker.update_with_detections(sv_detections)
+            sv_detections = build_supervision_detections(detections)
+            if sv_detections is not None:
+                tracked = byte_tracker.update_with_detections(sv_detections)
+                matched_det_indices = set()
+            else:
+                tracked = None
+                matched_det_indices = set()
+        else:
+            tracked = None
             matched_det_indices = set()
+
+        if tracked is not None:
             for box, tracker_id in zip(tracked.xyxy, tracked.tracker_id):
                 if tracker_id is None:
                     continue
@@ -861,6 +987,8 @@ class ByteTrackStyleTracker:
                 center_dist = float(np.linalg.norm(track_center - bbox_center(det["bbox"])))
                 if iou >= self.iou_threshold or center_dist <= self.center_radius_px:
                     score = (iou * 100.0) - (center_dist * 0.05) + (det.get("confidence", 0.0) * 5.0)
+                    if det.get("feature") is not None and track.get("feature") is not None:
+                        score += feature_similarity(track.get("feature"), det.get("feature")) * 12.0
                     candidates.append((score, track_id, det_idx))
         candidates.sort(reverse=True, key=lambda item: item[0])
 
@@ -940,7 +1068,7 @@ class ByteTrackStyleTracker:
                 return det
         return None
 
-def find_person_for_marker(marker_center, person_boxes, margin_ratio):
+def find_person_for_marker(marker_center, person_boxes, margin_ratio, existing_state=None):
     strict_containing = [
         person for person in person_boxes
         if expanded_contains(person["bbox"], marker_center, 0.0)
@@ -951,15 +1079,79 @@ def find_person_for_marker(marker_center, person_boxes, margin_ratio):
     ]
     if not containing:
         return None
+
     marker_point = np.array(marker_center, dtype=np.float32)
-    return min(
-        containing,
-        key=lambda person: (
-            float(np.linalg.norm(bbox_center(person["bbox"]) - marker_point)),
-            bbox_area(person["bbox"]),
-            -float(person.get("confidence", 0.0)),
-        ),
+    expected_track_id = None
+    previous_feature = None
+    if existing_state is not None:
+        expected_track_id = existing_state.get("track_id")
+        previous_feature = existing_state.get("last_feature")
+
+    def person_score(person):
+        center_dist = float(np.linalg.norm(bbox_center(person["bbox"]) - marker_point))
+        iou = 0.0
+        if existing_state is not None and existing_state.get("last_bbox") is not None:
+            iou = bbox_iou(existing_state["last_bbox"], person["bbox"])
+        feature_score = 0.0
+        if previous_feature is not None and person.get("feature") is not None:
+            feature_score = feature_similarity(previous_feature, person.get("feature"))
+        same_track_bonus = -160.0 if expected_track_id is not None and person.get("track_id") == expected_track_id else 0.0
+        inside_bonus = -100.0 if expanded_contains(person["bbox"], marker_point, 0.0) else 0.0
+        return (
+            center_dist * 0.45
+            - iou * 120.0
+            - feature_score * 200.0
+            + person.get("confidence", 0.0) * -10.0
+            + inside_bonus
+            + same_track_bonus
+            + bbox_area(person["bbox"]) * 0.0005
+        )
+
+    return min(containing, key=person_score)
+
+def synthesize_person_from_marker(marker_corners, frame_shape, existing_state=None):
+    """Fallback for bent/occluded workers when YOLO misses but ArUco is visible."""
+    pts = np.asarray(marker_corners, dtype=np.float32).reshape(-1, 2)
+    if pts.size == 0:
+        return None
+    h, w = frame_shape[:2]
+    center = pts.mean(axis=0)
+    marker_w = max(
+        float(np.linalg.norm(pts[0] - pts[1])),
+        float(np.linalg.norm(pts[2] - pts[3])),
+        12.0,
     )
+    marker_h = max(
+        float(np.linalg.norm(pts[1] - pts[2])),
+        float(np.linalg.norm(pts[3] - pts[0])),
+        12.0,
+    )
+    marker_size = max(marker_w, marker_h)
+
+    if existing_state and existing_state.get("last_bbox"):
+        x1, y1, x2, y2 = existing_state["last_bbox"]
+        prev_w = max(40.0, float(x2 - x1))
+        prev_h = max(60.0, float(y2 - y1))
+        box_w = max(prev_w * 0.75, marker_size * 4.5)
+        box_h = max(prev_h * 0.75, marker_size * 5.5)
+    else:
+        box_w = marker_size * 5.0
+        box_h = marker_size * 6.0
+
+    cx, cy = float(center[0]), float(center[1])
+    x1 = max(0.0, cx - box_w * 0.5)
+    x2 = min(float(w - 1), cx + box_w * 0.5)
+    y1 = max(0.0, cy - box_h * 0.45)
+    y2 = min(float(h - 1), cy + box_h * 0.65)
+    if x2 - x1 < 20 or y2 - y1 < 30:
+        return None
+    return {
+        "bbox": (x1, y1, x2, y2),
+        "confidence": 0.99,
+        "track_id": existing_state.get("track_id") if existing_state else None,
+        "feature": existing_state.get("last_feature") if existing_state else None,
+        "marker_only": True,
+    }
 
 def person_floor_point(person):
     x1, y1, x2, y2 = person["bbox"]
@@ -1064,8 +1256,6 @@ def find_continuation_person(worker_state, person_boxes, used_box_ids, max_radiu
     for idx, person in enumerate(person_boxes):
         if idx in used_box_ids:
             continue
-        if last_track_id is not None and person.get("track_id") != last_track_id:
-            continue
         floor_pos = person_floor_point(person)
         distance_px = float(np.linalg.norm(floor_pos - last_pos))
         iou = bbox_iou(last_bbox, person["bbox"]) if last_bbox else 0.0
@@ -1111,6 +1301,252 @@ def find_continuation_person(worker_state, person_boxes, used_box_ids, max_radiu
     used_box_ids.add(idx)
     return person
 
+def find_strict_employee_rebind(worker_state, person_boxes, used_box_ids):
+    """Recover an employee binding only when the same body is still obvious.
+
+    This is intentionally stricter than the normal continuation helper. It is
+    used for the brief case where ByteTrack changes ID after a bend/turn, but
+    we must not assign the employee to a nearby unknown worker.
+    """
+    last_bbox = worker_state.get("last_bbox")
+    if not person_boxes or last_bbox is None:
+        return None
+
+    last_center = bbox_center(last_bbox)
+    last_floor = np.array((last_center[0], last_bbox[3]), dtype=np.float32)
+    last_area = max(1.0, bbox_area(last_bbox))
+    last_aspect = bbox_aspect(last_bbox)
+    last_feature = worker_state.get("last_feature")
+    last_track_id = worker_state.get("track_id")
+    marker_id = worker_state.get("opencv_marker_id")
+    size_ref = max(1.0, np.sqrt(last_area))
+    candidates = []
+
+    for idx, person in enumerate(person_boxes):
+        if idx in used_box_ids:
+            continue
+        person_marker = person.get("employee_marker_id")
+        if person_marker is not None and marker_id is not None and int(person_marker) != int(marker_id):
+            continue
+
+        same_track = last_track_id is not None and person.get("track_id") == last_track_id
+        iou = bbox_iou(last_bbox, person["bbox"])
+        center_distance = float(np.linalg.norm(bbox_center(person["bbox"]) - last_center))
+        floor_distance = float(np.linalg.norm(person_floor_point(person) - last_floor))
+        feature_score = feature_similarity(last_feature, person.get("feature"))
+        area_ratio = abs(np.log(max(1.0, bbox_area(person["bbox"])) / last_area))
+        aspect_ratio = abs(np.log(bbox_aspect(person["bbox"]) / last_aspect)) if last_aspect else 0.0
+
+        if same_track:
+            candidates.append((3.0 + iou + feature_score, idx, person))
+            continue
+
+        shape_ok = area_ratio <= 0.55 and aspect_ratio <= 0.55
+        overlap_ok = iou >= 0.35
+        position_ok = center_distance <= max(55.0, size_ref * 0.28) and floor_distance <= max(85.0, size_ref * 0.42)
+        appearance_ok = feature_score >= 0.68
+        no_feature_strict = feature_score <= 0.0 and iou >= 0.58 and position_ok
+
+        if not shape_ok:
+            continue
+        if not ((overlap_ok and appearance_ok) or (position_ok and appearance_ok) or no_feature_strict):
+            continue
+
+        score = (
+            iou * 1.6
+            + feature_score * 1.3
+            - min(center_distance / max(1.0, size_ref), 2.0) * 0.35
+            - area_ratio * 0.25
+            - aspect_ratio * 0.20
+        )
+        candidates.append((score, idx, person))
+
+    if not candidates:
+        return None
+    candidates.sort(reverse=True, key=lambda item: item[0])
+    if len(candidates) > 1 and candidates[0][0] - candidates[1][0] < 0.35:
+        return None
+
+    _, idx, person = candidates[0]
+    used_box_ids.add(idx)
+    return person
+
+def find_safe_hidden_continuation(worker_state, person_boxes, used_box_ids, max_radius_px, min_iou):
+    candidate = find_continuation_person(
+        worker_state,
+        person_boxes,
+        used_box_ids,
+        max_radius_px,
+        min_iou,
+    )
+    if candidate is None:
+        last_bbox = worker_state.get("last_bbox")
+        if not last_bbox:
+            return None
+        last_center = bbox_center(last_bbox)
+        last_floor = np.array((last_center[0], last_bbox[3]), dtype=np.float32)
+        last_area = max(1.0, bbox_area(last_bbox))
+        last_aspect = bbox_aspect(last_bbox)
+        nearby = []
+        for idx, person in enumerate(person_boxes):
+            if idx in used_box_ids:
+                continue
+            person_marker = person.get("employee_marker_id")
+            if person_marker is not None and int(person_marker) != int(worker_state.get("opencv_marker_id", person_marker)):
+                continue
+            center_distance = float(np.linalg.norm(bbox_center(person["bbox"]) - last_center))
+            floor_distance = float(np.linalg.norm(person_floor_point(person) - last_floor))
+            area_ratio = abs(np.log(max(1.0, bbox_area(person["bbox"])) / last_area))
+            aspect_ratio = abs(np.log(bbox_aspect(person["bbox"]) / last_aspect)) if last_aspect else 0.0
+            if center_distance <= max(125.0, max_radius_px * 0.70) or floor_distance <= max(150.0, max_radius_px * 0.80):
+                if area_ratio <= 1.35 and aspect_ratio <= 1.35:
+                    nearby.append((center_distance + floor_distance * 0.5 + area_ratio * 30.0, idx, person))
+        if len(nearby) != 1:
+            return None
+        _, idx, candidate = nearby[0]
+        used_box_ids.add(idx)
+        return candidate
+
+    last_bbox = worker_state.get("last_bbox")
+    last_feature = worker_state.get("last_feature")
+    last_track_id = worker_state.get("track_id")
+    same_track = last_track_id is not None and candidate.get("track_id") == last_track_id
+    if same_track:
+        return candidate
+
+    if last_bbox is None:
+        return None
+
+    iou = bbox_iou(last_bbox, candidate["bbox"])
+    feature_score = feature_similarity(last_feature, candidate.get("feature"))
+    center_distance = float(np.linalg.norm(bbox_center(candidate["bbox"]) - bbox_center(last_bbox)))
+    size_ref = max(1.0, np.sqrt(max(1.0, bbox_area(last_bbox))))
+    if feature_score < 0.62:
+        return None
+    if iou < 0.18 and center_distance > max(95.0, size_ref * 0.65):
+        return None
+
+    close_unknowns = 0
+    for person in person_boxes:
+        if person is candidate:
+            continue
+        if person.get("employee_marker_id") is not None:
+            continue
+        other_distance = float(np.linalg.norm(bbox_center(person["bbox"]) - bbox_center(last_bbox)))
+        if other_distance <= max(120.0, size_ref * 0.85):
+            close_unknowns += 1
+    if close_unknowns >= 2:
+        return None
+    return candidate
+
+def create_cv_visual_tracker():
+    if hasattr(cv2, "TrackerCSRT_create"):
+        return cv2.TrackerCSRT_create()
+    if hasattr(cv2, "legacy") and hasattr(cv2.legacy, "TrackerCSRT_create"):
+        return cv2.legacy.TrackerCSRT_create()
+    if hasattr(cv2, "TrackerKCF_create"):
+        return cv2.TrackerKCF_create()
+    if hasattr(cv2, "legacy") and hasattr(cv2.legacy, "TrackerKCF_create"):
+        return cv2.legacy.TrackerKCF_create()
+    return None
+
+def init_visual_lock(visual_trackers, cam_id, marker_id, frame, bbox, now_ts):
+    tracker = create_cv_visual_tracker()
+    if tracker is None or frame is None:
+        return
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = [float(v) for v in bbox]
+    x1 = max(0.0, min(w - 2.0, x1))
+    y1 = max(0.0, min(h - 2.0, y1))
+    x2 = max(x1 + 2.0, min(float(w), x2))
+    y2 = max(y1 + 2.0, min(float(h), y2))
+    rect = (
+        int(round(x1)),
+        int(round(y1)),
+        int(round(x2 - x1)),
+        int(round(y2 - y1)),
+    )
+    ok = tracker.init(frame, rect)
+    if ok is False:
+        return
+    visual_trackers[(cam_id, int(marker_id))] = {
+        "tracker": tracker,
+        "bbox": (x1, y1, x2, y2),
+        "last_update_ts": now_ts,
+    }
+
+def visual_lock_person(visual_trackers, cam_id, marker_id, worker_state, frame, person_boxes, now_ts, max_age_seconds):
+    lock = visual_trackers.get((cam_id, int(marker_id)))
+    if not lock or frame is None:
+        return None
+    if now_ts - worker_state.get("last_marker_seen_ts", 0.0) > max_age_seconds:
+        visual_trackers.pop((cam_id, int(marker_id)), None)
+        return None
+
+    tracker = lock.get("tracker")
+    if tracker is None:
+        return None
+    ok, box = tracker.update(frame)
+    if not ok:
+        visual_trackers.pop((cam_id, int(marker_id)), None)
+        return None
+
+    h, w = frame.shape[:2]
+    x, y, bw, bh = [float(v) for v in box]
+    if bw < 18 or bh < 28:
+        visual_trackers.pop((cam_id, int(marker_id)), None)
+        return None
+    x1 = max(0.0, min(w - 1.0, x))
+    y1 = max(0.0, min(h - 1.0, y))
+    x2 = max(x1 + 1.0, min(float(w), x + bw))
+    y2 = max(y1 + 1.0, min(float(h), y + bh))
+    bbox = (x1, y1, x2, y2)
+
+    matching_person = None
+    best_iou = 0.0
+    for person in person_boxes or []:
+        iou = bbox_iou(bbox, person["bbox"])
+        if iou > best_iou:
+            best_iou = iou
+            matching_person = person
+    if matching_person is None:
+        visual_trackers.pop((cam_id, int(marker_id)), None)
+        return None
+
+    visual_center = bbox_center(bbox)
+    if best_iou < 0.18:
+        containing_people = [
+            person for person in (person_boxes or [])
+            if expanded_contains(person["bbox"], visual_center, 0.0)
+        ]
+        if len(containing_people) == 1:
+            matching_person = containing_people[0]
+        else:
+            visual_trackers.pop((cam_id, int(marker_id)), None)
+            return None
+
+    last_bbox = worker_state.get("last_bbox")
+    if last_bbox is not None:
+        prev_area = max(1.0, bbox_area(last_bbox))
+        next_area = max(1.0, bbox_area(bbox))
+        area_ratio = abs(np.log(next_area / prev_area))
+        if area_ratio > 1.80:
+            visual_trackers.pop((cam_id, int(marker_id)), None)
+            return None
+
+    bbox = matching_person["bbox"]
+    lock["bbox"] = bbox
+    lock["last_update_ts"] = now_ts
+    return {
+        "bbox": bbox,
+        "confidence": min(0.95, max(0.55, float(matching_person.get("confidence", worker_state.get("person_conf", 0.6))))),
+        "track_id": matching_person.get("track_id", worker_state.get("track_id")),
+        "feature": matching_person.get("feature", worker_state.get("last_feature")),
+        "global_id": f"emp_{int(marker_id)}",
+        "employee_marker_id": int(marker_id),
+        "visual_lock": True,
+    }
+
 def accept_path_step(worker_state, dist_feet, d_pixels, tracking_mode):
     if len(worker_state.get("path", [])) <= 1:
         return True
@@ -1145,7 +1581,7 @@ def likely_recent_tracked_person(person, worker_states, cam_id, now_ts, max_seco
 
 def account_worker_time(worker_state, now_ts, stale_after_seconds):
     last_account_ts = worker_state.get("last_account_ts", now_ts)
-    delta = max(0.0, min(now_ts - last_account_ts, 1.0))
+    delta = max(0.0, min(now_ts - last_account_ts, max(10.0, float(stale_after_seconds))))
     worker_state["last_account_ts"] = now_ts
 
     if delta <= 0:
@@ -1167,15 +1603,16 @@ def account_worker_time(worker_state, now_ts, stale_after_seconds):
     worker_state["status_times"].pop("LOST", None)
     worker_state["status_times"][status] = worker_state["status_times"].get(status, 0.0) + delta
 
-def build_employee_record(marker_id, worker_state, now_ts):
+def build_employee_record(marker_id, worker_state, now_ts, visible_grace_seconds=8.0):
     if worker_state.get("status") == "LOST":
         worker_state["status"] = "WORKING"
     if "status_times" in worker_state:
         worker_state["status_times"].pop("LOST", None)
     last_seen_age = now_ts - worker_state.get("last_seen_ts", now_ts)
     visible_now = bool(worker_state.get("visible_now", False))
-    display_status = worker_state["status"] if visible_now or last_seen_age <= 8.0 else "NOT_VISIBLE"
-    tracking_mode = worker_state.get("tracking_mode", "unknown") if visible_now or last_seen_age <= 8.0 else "waiting_for_reappearance"
+    recently_visible = visible_now or last_seen_age <= visible_grace_seconds
+    display_status = worker_state["status"] if recently_visible else "NOT_VISIBLE"
+    tracking_mode = worker_state.get("tracking_mode", "unknown") if recently_visible else "waiting_for_reappearance"
     return {
         "id": worker_state.get("display_marker_id", marker_id),
         "opencv_marker_id": worker_state.get("opencv_marker_id", marker_id),
@@ -1199,6 +1636,7 @@ def build_employee_record(marker_id, worker_state, now_ts):
         "camera_times_sec": {k: round(v, 2) for k, v in worker_state.get("camera_times", {}).items()},
         "status_times_sec": {k: round(v, 2) for k, v in worker_state.get("status_times", {}).items()},
         "path_view": worker_state.get("path_view", recording_view_path(worker_state.get("display_marker_id", marker_id), worker_state["name"], worker_state.get("cam_id", "unknown"))),
+        "proof_view": worker_state.get("proof_view", proof_recording_view_path(worker_state.get("display_marker_id", marker_id), worker_state["name"])),
     }
 
 def recording_root():
@@ -1218,8 +1656,31 @@ def recording_filename(marker_id, employee_name, cam_id):
 def recording_disk_path(marker_id, employee_name, cam_id):
     return str(Path(recording_root()) / recording_filename(marker_id, employee_name, cam_id))
 
+def proof_recording_filename(marker_id, employee_name):
+    return f"{marker_id}_{safe_filename(employee_name)}_proof.mp4"
+
+def proof_recording_disk_path(marker_id, employee_name):
+    return str(Path(recording_root()) / "proof" / proof_recording_filename(marker_id, employee_name))
+
+def to_web_path(path):
+    resolved = Path(path).resolve()
+    try:
+        return "/" + resolved.relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return "/" + resolved.as_posix().lstrip("/")
+
 def recording_view_path(marker_id, employee_name, cam_id):
-    return "/" + str(Path(recording_root()) / recording_filename(marker_id, employee_name, cam_id)).replace("\\", "/")
+    return to_web_path(Path(recording_root()) / recording_filename(marker_id, employee_name, cam_id))
+
+def proof_recording_view_path(marker_id, employee_name):
+    return to_web_path(Path(recording_root()) / "proof" / proof_recording_filename(marker_id, employee_name))
+
+def unassigned_marker_snapshot_path(marker_id, cam_id, now_ts):
+    day = time.strftime("%Y-%m-%d", time.localtime(now_ts))
+    stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(now_ts))
+    folder = Path("outputs") / "unassigned_marker_captures" / day
+    folder.mkdir(parents=True, exist_ok=True)
+    return str(folder / f"marker_{int(marker_id):02d}_{safe_filename(cam_id)}_{stamp}.jpg")
 
 def write_jpeg_atomic(path, frame, quality):
     temp_path = path.replace(".jpg", "_tmp.jpg")
@@ -1517,16 +1978,26 @@ def main():
         decoder_log_handle = redirect_decoder_stderr(runtime["decoder_log_file"])
 
     employee_df = pd.read_csv("data/employees.csv")
-    employee_map = {
-        int(r.get("opencv_marker_id", r["marker_id"])): {
-            "id": int(r["marker_id"]),
-            "opencv_marker_id": int(r.get("opencv_marker_id", r["marker_id"])),
-            "name": r["name"],
-            "dept": r.get("department", "Production"),
-            "active": str(r.get("active", "yes")).strip().lower() != "no",
+    employee_map = {}
+    for _, r in employee_df.iterrows():
+        active = str(r.get("active", "yes")).strip().lower() != "no"
+        name = str(r.get("name", "")).strip()
+        opencv_marker_id = int(r.get("opencv_marker_id", r["marker_id"]))
+        display_marker_id = int(r["marker_id"])
+        if not active or not name or name.lower().startswith("marker_") or "unassigned" in name.lower():
+            name = f"Marker {display_marker_id:02d} Unassigned"
+            department = "Unassigned"
+        else:
+            department = r.get("department", "Production")
+        employee_map[opencv_marker_id] = {
+            "id": display_marker_id,
+            "opencv_marker_id": opencv_marker_id,
+            "name": name,
+            "dept": department,
+            "active": active,
+            "assigned": active and department != "Unassigned",
         }
-        for _, r in employee_df.iterrows()
-    }
+    print(f"[STARTUP] Loaded employee_map with IDs: {sorted(employee_map.keys())}")
 
     inference_workers = load_models_for_devices(config["detection"]["model_path"], devices)
     inference_executor = (
@@ -1557,6 +2028,8 @@ def main():
     last_aruco_frame_index = {}
     last_dashboard_save_ts = {}
     pending_live_writes = {}
+    last_unassigned_snapshot_ts = {}
+    visual_trackers = {}
     loop_counter = 0
     os.makedirs("logs", exist_ok=True)
     os.makedirs(runtime["log_dir"], exist_ok=True)
@@ -1593,6 +2066,8 @@ def main():
         runtime["path_video_min_frames"],
     )
     last_camera_sync_ts = 0.0
+    last_stats_write_ts = 0.0
+    stats_write_interval = 0.5  # Write live_stats.json only every 0.5 seconds (2x/sec instead of 8x/sec)
 
     try:
         while True:
@@ -1632,6 +2107,9 @@ def main():
                         "target_fps": runtime["target_fps"],
                         "path_video_every_n_frames": runtime["path_video_every_n_frames"],
                         "path_video_fps": runtime["path_video_fps"],
+                        "reconnect_after": runtime["reconnect_after"],
+                        "reconnect_interval_seconds": runtime["reconnect_interval_seconds"],
+                        "stale_camera_after_seconds": runtime["stale_camera_after_seconds"],
                         "distance_methods": distance_methods,
                         "marker_confirmations_required": runtime["marker_confirmations_required"],
                         "marker_stale_after_seconds": runtime["marker_stale_after_seconds"],
@@ -1649,7 +2127,7 @@ def main():
                 prepared_frames = []
                 aruco_futures = {}
                 for cam in cameras:
-                    frame, read_ts = cam.latest()
+                    frame, read_ts = cam.latest(copy=False)
                     if frame is None:
                         continue
 
@@ -1724,6 +2202,7 @@ def main():
                                 runtime["aruco_crop_zoom"],
                                 runtime["aruco_crop_margin_ratio"],
                                 runtime["min_marker_area"],
+                                runtime.get("debug_mode", False),
                             )
                         else:
                             corners, ids = None, None
@@ -1746,7 +2225,20 @@ def main():
                             full_ids,
                         )
 
+                        num_markers = int(ids.size) if ids is not None else 0
+                        num_crop_matches = sum(1 for match in marker_person_matches.values() if match is not None)
+                        if runtime.get("debug_mode"):
+                            print(
+                                f"[DEBUG] cam={cam_id} frame={frame_index} persons={len(person_boxes)} "
+                                f"markers={num_markers} crop_matches={num_crop_matches} "
+                                f"pending_switches={len(pending_track_switches)}"
+                            )
+
                         if ids is not None:
+                            detected_ids = ids.flatten().tolist()
+                            unmapped_ids = [mid for mid in detected_ids if employee_map.get(mid) is None]
+                            if unmapped_ids:
+                                print(f"[MARKER UNKNOWN] cam={cam_id} frame={frame_index}: OpenCV IDs {unmapped_ids} not in employees.csv")
                             for i, marker_id in enumerate(ids.flatten()):
                                 marker_id = int(marker_id)
                                 emp = employee_map.get(marker_id)
@@ -1757,18 +2249,16 @@ def main():
                                 if marker_area(marker_corners) < runtime["min_marker_area"]:
                                     continue
 
-                                raw_pos = marker_corners.mean(axis=0)
                                 matched_person = marker_person_matches.get(i)
-                                if matched_person is None:
-                                    matched_person = find_person_for_marker(
-                                        raw_pos,
-                                        person_boxes,
-                                        runtime["person_box_margin"],
-                                    )
+                                existing_state = history.get(marker_id)
                                 if matched_person is None:
                                     marker_confirmations.pop((cam_id, marker_id), None)
+                                    if runtime.get("debug_mode"):
+                                        print(
+                                            f"[MARKER IGNORE] cam={cam_id} frame={frame_index}: "
+                                            f"marker={marker_id} is not inside a detected person"
+                                        )
                                     continue
-                                existing_state = history.get(marker_id)
                                 matched_track_id = matched_person.get("track_id")
                                 if existing_state and existing_state.get("cam_id") == cam_id:
                                     current_track_id = existing_state.get("track_id")
@@ -1799,6 +2289,14 @@ def main():
                                     person_tracker.bind_employee(cam_id, matched_person["track_id"], marker_id)
                                     matched_person["employee_marker_id"] = marker_id
                                     matched_person["global_id"] = f"emp_{marker_id}"
+                                init_visual_lock(
+                                    visual_trackers,
+                                    cam_id,
+                                    marker_id,
+                                    render_frame,
+                                    matched_person["bbox"],
+                                    now_ts,
+                                )
 
                                 confirmation_key = (cam_id, marker_id)
                                 marker_confirmations[confirmation_key] = marker_confirmations.get(confirmation_key, 0) + 1
@@ -1837,6 +2335,7 @@ def main():
                                         "camera_times": {},
                                         "status_times": {"WALKING": 0.0, "WORKING": 0.0},
                                         "path_view": recording_view_path(emp.get("id", marker_id), emp["name"], cam_id),
+                                        "proof_view": proof_recording_view_path(emp.get("id", marker_id), emp["name"]),
                                         "cam_id": cam_id,
                                         "track_id": matched_person.get("track_id"),
                                         "last_bbox": matched_person["bbox"],
@@ -1869,6 +2368,7 @@ def main():
                                     worker_state["status"] = "WORKING"
                                     worker_state["distance_method"] = calibration.get("method", "legacy_video_pixels")
                                     worker_state["path_view"] = recording_view_path(worker_state.get("display_marker_id", marker_id), worker_state["name"], cam_id)
+                                    worker_state["proof_view"] = proof_recording_view_path(worker_state.get("display_marker_id", marker_id), worker_state["name"])
                                     worker_state["last_bbox"] = matched_person["bbox"]
                                     if matched_person.get("feature") is not None:
                                         worker_state["last_feature"] = matched_person.get("feature")
@@ -1884,6 +2384,7 @@ def main():
                                 worker_state["person_conf"] = matched_person["confidence"]
                                 worker_state["track_id"] = matched_person.get("track_id")
                                 worker_state["path_view"] = recording_view_path(worker_state.get("display_marker_id", marker_id), worker_state["name"], cam_id)
+                                worker_state["proof_view"] = proof_recording_view_path(worker_state.get("display_marker_id", marker_id), worker_state["name"])
                                 worker_state["last_bbox"] = matched_person["bbox"]
                                 if matched_person.get("feature") is not None:
                                     worker_state["last_feature"] = matched_person.get("feature")
@@ -1938,6 +2439,17 @@ def main():
                                     (255, 255, 255),
                                     1,
                                 )
+                                if not emp.get("assigned", False):
+                                    snapshot_key = (cam_id, marker_id)
+                                    if now_ts - last_unassigned_snapshot_ts.get(snapshot_key, 0.0) >= 20.0:
+                                        snapshot_path = unassigned_marker_snapshot_path(emp.get("id", marker_id), cam_id, now_ts)
+                                        image_writer_pool.submit(
+                                            write_jpeg_atomic,
+                                            snapshot_path,
+                                            render_frame.copy(),
+                                            82,
+                                        )
+                                        last_unassigned_snapshot_ts[snapshot_key] = now_ts
 
                         for marker_id, worker_state in history.items():
                             if worker_state.get("cam_id") != cam_id or marker_id in marker_seen_workers:
@@ -1951,19 +2463,35 @@ def main():
                             )
                             tracking_mode = "byte_track_reid"
                             if matched_person is None:
-                                if marker_age > runtime["marker_hidden_max_seconds"]:
-                                    continue
-                                continuation_radius = runtime["marker_hidden_match_radius_px"] + min(180.0, marker_age * 10.0)
-                                matched_person = find_continuation_person(
+                                matched_person = find_strict_employee_rebind(
                                     worker_state,
                                     person_boxes,
                                     used_person_box_ids,
-                                    continuation_radius,
+                                )
+                                tracking_mode = "strict_rebind"
+                            if matched_person is None and marker_age <= runtime["marker_hidden_max_seconds"]:
+                                matched_person = find_safe_hidden_continuation(
+                                    worker_state,
+                                    person_boxes,
+                                    used_person_box_ids,
+                                    runtime["marker_hidden_match_radius_px"],
                                     runtime["marker_hidden_min_iou"],
                                 )
-                                tracking_mode = "marker_hidden"
+                                tracking_mode = "safe_hidden"
                             if matched_person is None:
-                                continue
+                                matched_person = visual_lock_person(
+                                    visual_trackers,
+                                    cam_id,
+                                    marker_id,
+                                    worker_state,
+                                    render_frame,
+                                    person_boxes,
+                                    now_ts,
+                                    runtime["marker_hidden_max_seconds"],
+                                )
+                                tracking_mode = "visual_lock"
+                                if matched_person is None:
+                                    continue
 
                             if matched_person.get("track_id") is not None:
                                 person_tracker.bind_employee(cam_id, matched_person["track_id"], marker_id)
@@ -1976,9 +2504,10 @@ def main():
                             worker_zone = resolve_worker_zone(map_pos, cam_id, floor_model)
 
                             worker_state["last_seen_ts"] = now_ts
-                            worker_state["person_conf"] = min(worker_state.get("person_conf", 0.0), matched_person["confidence"])
+                            worker_state["person_conf"] = matched_person["confidence"]
                             worker_state["track_id"] = matched_person.get("track_id")
                             worker_state["path_view"] = recording_view_path(worker_state.get("display_marker_id", marker_id), worker_state["name"], cam_id)
+                            worker_state["proof_view"] = proof_recording_view_path(worker_state.get("display_marker_id", marker_id), worker_state["name"])
                             worker_state["last_bbox"] = matched_person["bbox"]
                             if matched_person.get("feature") is not None:
                                 worker_state["last_feature"] = matched_person.get("feature")
@@ -2108,7 +2637,12 @@ def main():
                     state["path"] = state.get("camera_paths", {}).get(current_cam, state.get("path", []))
                     display_marker_id = state.get("display_marker_id", mid)
                     state["path_view"] = recording_view_path(display_marker_id, state["name"], current_cam)
-                    employee_record = build_employee_record(mid, state, now_ts)
+                    employee_record = build_employee_record(
+                        mid,
+                        state,
+                        now_ts,
+                        min(runtime["marker_hidden_max_seconds"], runtime["marker_hidden_grace_seconds"]),
+                    )
                     employee_records.append(employee_record)
 
                     if visible_this_loop and loop_counter % runtime["path_video_every_n_frames"] == 0:
@@ -2133,6 +2667,7 @@ def main():
                         )
                         path_frame, _ = resize_to_width(path_frame, runtime["dashboard_image_width"])
                         path_video_recorder.write(recording_disk_path(display_marker_id, state["name"], current_cam), path_frame)
+                        path_video_recorder.write(proof_recording_disk_path(display_marker_id, state["name"]), path_frame)
 
                     frame_data["stats"].append(employee_record)
 
@@ -2142,9 +2677,13 @@ def main():
                         "timestamp": frame_data["timestamp"],
                         "employees": employee_records,
                     }, f, indent=2)
-                for live_stats_path in {runtime["live_stats_file"], runtime["dashboard_live_stats_file"]}:
-                    with open(live_stats_path, "w") as f:
-                        json.dump(frame_data, f, indent=2)
+                
+                # Throttle live_stats.json writes to reduce I/O contention
+                if now_ts - last_stats_write_ts >= stats_write_interval:
+                    for live_stats_path in {runtime["live_stats_file"], runtime["dashboard_live_stats_file"]}:
+                        with open(live_stats_path, "w") as f:
+                            json.dump(frame_data, f, indent=2)
+                    last_stats_write_ts = now_ts
 
                 elapsed = time.time() - loop_started
                 time.sleep(max(0.0, loop_interval - elapsed))

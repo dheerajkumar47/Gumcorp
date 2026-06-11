@@ -13,30 +13,30 @@ runtime:
   camera_profile: "main_stream"
   inference_width: 1280
   aruco_max_width: 1920
-  aruco_every_n_frames: 3
-  aruco_workers: 3
+  aruco_every_n_frames: 2
+  aruco_workers: 2
   aruco_crop_first_enabled: true
   aruco_crop_zoom: 4.0
-  aruco_crop_margin_ratio: 0.08
-  aruco_full_frame_fallback: true
+  aruco_crop_margin_ratio: 0.15
+  aruco_full_frame_fallback: false
   batch_size: 4
   dashboard_image_width: 1280
-  dashboard_fps: 10
-  image_writer_workers: 2
-  path_video_every_n_frames: 10
-  path_video_fps: 1.0
-  path_video_min_frames: 3
+  dashboard_fps: 5
+  image_writer_workers: 1
+  path_video_every_n_frames: 6
+  path_video_fps: 2.5
+  path_video_min_frames: 2
   path_video_codec: "mp4v"
   redirect_decoder_logs: true
   decoder_log_file: "logs/decoder_ffmpeg.log"
   monitor_interval_seconds: 2.0
-  reconnect_after: 10
-  reconnect_interval_seconds: 8.0
-  stale_camera_after_seconds: 12.0
-  marker_confirmations_required: 2
+  reconnect_after: 45
+  reconnect_interval_seconds: 3.0
+  stale_camera_after_seconds: 30.0
+  marker_confirmations_required: 1
   marker_stale_after_seconds: 8.0
   marker_hidden_grace_seconds: 90.0
-  marker_hidden_match_radius_px: 280.0
+  marker_hidden_match_radius_px: 220.0
   marker_hidden_max_seconds: 90.0
   marker_hidden_min_iou: 0.02
   tracker_iou_threshold: 0.12
@@ -45,10 +45,10 @@ runtime:
   reid_match_threshold: 0.72
   reid_max_gap_seconds: 45.0
   person_box_margin: 0.15
+  min_marker_area: 60
   activity_upper_motion_threshold: 0.026
   activity_gesture_motion_threshold: 0.018
   activity_idle_after_seconds: 20.0
-  min_marker_area: 80
   employee_records_file: "logs/employee_records.json"
   jpeg_quality_live: 82
   camera_registry_file: "data/cameras.json"
@@ -105,7 +105,7 @@ cameras:
     stream_profiles:
       main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30312/unicast/c1/s1/live"
       sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30312/unicast/c1/s1/live"
-    enabled: false
+    enabled: true
     position: [100, 500]
     calibration_points:
       camera_points: []
@@ -116,7 +116,7 @@ cameras:
     stream_profiles:
       main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30322/unicast/c1/s1/live"
       sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30322/unicast/c1/s1/live"
-    enabled: false
+    enabled: true
     position: [500, 500]
     calibration_points:
       camera_points: []
@@ -127,7 +127,7 @@ cameras:
     stream_profiles:
       main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30332/unicast/c1/s1/live"
       sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30332/unicast/c1/s1/live"
-    enabled: false
+    enabled: true
     position: [900, 500]
     calibration_points:
       camera_points: []
@@ -138,7 +138,7 @@ cameras:
     stream_profiles:
       main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30342/unicast/c1/s1/live"
       sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30342/unicast/c1/s1/live"
-    enabled: false
+    enabled: true
     position: [1300, 500]
     calibration_points:
       camera_points: []
@@ -235,8 +235,8 @@ cameras:
 
 # Detection Settings (YOLOv8)
 detection:
-  model_path: "models/yolov8n.pt"
-  confidence_threshold: 0.35
+  model_path: "models/yolo11m.pt"
+  confidence_threshold: 0.28
   iou_threshold: 0.45
   classes: [0]
 

@@ -69,11 +69,11 @@ class ThreadedCamera:
         if self._cap is not None:
             self._cap.release()
 
-    def latest(self) -> Tuple[Optional[np.ndarray], float]:
+    def latest(self, copy: bool = True) -> Tuple[Optional[np.ndarray], float]:
         with self._lock:
             if self._frame is None:
                 return None, self._read_ts
-            return self._frame.copy(), self._read_ts
+            return (self._frame.copy() if copy else self._frame), self._read_ts
 
     def status(self) -> dict:
         with self._lock:
@@ -117,7 +117,7 @@ class ThreadedCamera:
         self.video_path = self._current_source()
         with _OPEN_CAPTURE_SEMAPHORE:
             self._cap = cv2.VideoCapture(self.video_path, cv2.CAP_FFMPEG)
-        self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
         if self.width:
             self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         if self.height:

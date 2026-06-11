@@ -1,51 +1,48 @@
-marker_id,opencv_marker_id,marker_file,name,employee_name,employee_code,department,designation,shift,active
-1,0,data/aruco_markers/marker_01.png,Marker_01_Unassigned,,,Unassigned,,,no
-2,1,data/aruco_markers/marker_02.png,Marker_02_Unassigned,,,Unassigned,,,no
-3,2,data/aruco_markers/marker_03.png,Marker_03_Unassigned,,,Unassigned,,,no
-4,3,data/aruco_markers/marker_04.png,Marker_04_Unassigned,,,Unassigned,,,no
-5,4,data/aruco_markers/marker_05.png,Marker_05_Unassigned,,,Unassigned,,,no
-6,5,data/aruco_markers/marker_06.png,Fazal Hussain,Fazal Hussain,1015,Production,Paking Man,A,yes
-7,6,data/aruco_markers/marker_07.png,M.Hashim,M.Hashim,D.W,Production,Helper,A,yes
-8,7,data/aruco_markers/marker_08.png,Marker_08_Unassigned,,,Unassigned,,,no
-9,8,data/aruco_markers/marker_09.png,Fida,Fida,1186,Production,Paking Man,B,yes
-10,9,data/aruco_markers/marker_10.png,Karimdad,Karimdad,1268,Production,Helper,B,yes
-11,10,data/aruco_markers/marker_11.png,Marker_11_Unassigned,,,Unassigned,,,no
-12,11,data/aruco_markers/marker_12.png,Rizwan Ali,Rizwan Ali,1194,Production,Paking Man,A,yes
-13,12,data/aruco_markers/marker_13.png,Sameer,Sameer,D.W,Production,Helper,B,yes
-14,13,data/aruco_markers/marker_14.png,Namutullah,Namutullah,D.W,Production,Helper,,yes
-15,14,data/aruco_markers/marker_15.png,Irashad Ali,Irashad Ali,D.W,Production,Helper,A,yes
-16,15,data/aruco_markers/marker_16.png,Ali Akbar,Ali Akbar,1013,Production,Sheet Line Oprator,A,yes
-17,16,data/aruco_markers/marker_17.png,Marker_17_Unassigned,,,Unassigned,,,no
-18,17,data/aruco_markers/marker_18.png,Marker_18_Unassigned,,,Unassigned,,,no
-19,18,data/aruco_markers/marker_19.png,Marker_19_Unassigned,,,Unassigned,,,no
-20,19,data/aruco_markers/marker_20.png,Marker_20_Unassigned,,,Unassigned,,,no
-21,20,data/aruco_markers/marker_21.png,Amjad Ali,Amjad Ali,D.W,Production,Helper,B,yes
-22,21,data/aruco_markers/marker_22.png,Marker_22_Unassigned,,,Unassigned,,,no
-23,22,data/aruco_markers/marker_23.png,Waqas Ali,Waqas Ali,1306,House Keeping,Cleaner,A,yes
-24,23,data/aruco_markers/marker_24.png,Zohaib Ali,Zohaib Ali,D.W,Cleaning,House Keeping,A,yes
-25,24,data/aruco_markers/marker_25.png,Mamtaz Ali,Mamtaz Ali,1284,Production,Helper,B,yes
-26,25,data/aruco_markers/marker_26.png,Zaid Ali 1,Zaid Ali 1,D.W,Poping Candy,Helper,A,yes
-27,26,data/aruco_markers/marker_27.png,Marker_27_Unassigned,,,Unassigned,,,no
-28,27,data/aruco_markers/marker_28.png,Marker_28_Unassigned,,,Unassigned,,,no
-29,28,data/aruco_markers/marker_29.png,Marker_29_Unassigned,,,Unassigned,,,no
-30,29,data/aruco_markers/marker_30.png,Iqbal,Iqbal,1117,Production,Paking Man,B,yes
-31,30,data/aruco_markers/marker_31.png,Marker_31_Unassigned,,,Unassigned,,,no
-32,31,data/aruco_markers/marker_32.png,Parvaiz Ahmed,Parvaiz Ahmed,1121,Production,Machine Operator,A,yes
-33,32,data/aruco_markers/marker_33.png,Marker_33_Unassigned,,,Unassigned,,,no
-34,33,data/aruco_markers/marker_34.png,Marker_34_Unassigned,,,Unassigned,,,no
-35,34,data/aruco_markers/marker_35.png,Marker_35_Unassigned,,,Unassigned,,,no
-36,35,data/aruco_markers/marker_36.png,Marker_36_Unassigned,,,Unassigned,,,no
-37,36,data/aruco_markers/marker_37.png,Marker_37_Unassigned,,,Unassigned,,,no
-38,37,data/aruco_markers/marker_38.png,Marker_38_Unassigned,,,Unassigned,,,no
-39,38,data/aruco_markers/marker_39.png,Saleem,Saleem,1076,Production,Sheet Line Oprator,,yes
-40,39,data/aruco_markers/marker_40.png,Marker_40_Unassigned,,,Unassigned,,,no
-41,40,data/aruco_markers/marker_41.png,Marker_41_Unassigned,,,Unassigned,,,no
-42,41,data/aruco_markers/marker_42.png,Marker_42_Unassigned,,,Unassigned,,,no
-43,42,data/aruco_markers/marker_43.png,Marker_43_Unassigned,,,Unassigned,,,no
-44,43,data/aruco_markers/marker_44.png,Gulam Qadir,Gulam Qadir,1018,Production,Helper,A,yes
-45,44,data/aruco_markers/marker_45.png,Marker_45_Unassigned,,,Unassigned,,,no
-46,45,data/aruco_markers/marker_46.png,Marker_46_Unassigned,,,Unassigned,,,no
-47,46,data/aruco_markers/marker_47.png,Marker_47_Unassigned,,,Unassigned,,,no
-48,47,data/aruco_markers/marker_48.png,Marker_48_Unassigned,,,Unassigned,,,no
-49,48,data/aruco_markers/marker_49.png,Muharum,Muharum,1024,Production,Helper,A,yes
-50,49,data/aruco_markers/marker_50.png,Wajahat Gul,Wajahat Gul,1201,Production,Helper,A,yes
+marker_id,opencv_marker_id,name,department,employee_code,designation,shift,active
+1,0,Marker_01_Unassigned,Unassigned,,,,no
+2,1,Marker_02_Unassigned,Unassigned,,,,no
+3,2,Marker_03_Unassigned,Unassigned,,,,no
+4,3,Mamtaz,Production,1284,Helper,B,yes
+5,4,Marker_05_Unassigned,Unassigned,,,,no
+6,5,Fazal Hussain,Production,1015,Paking Man,A,yes
+7,6,M.Hashim,Production,D.W,Helper,A,yes
+8,7,Marker_08_Unassigned,Unassigned,,,,no
+9,8,Fida,Production,1186,Paking Man,B,yes
+10,9,Karimdad,Production,1268,Helper,B,yes
+11,10,Marker_11_Unassigned,Unassigned,,,,no
+12,11,Rizwan Ali,Production,1194,Paking Man,A,yes
+13,12,Sameer,Production,D.W,Helper,B,yes
+14,13,Namutullah,Production,D.W,Helper,,yes
+15,14,Irashad Ali,Production,D.W,Helper,A,yes
+16,15,Ali Akbar,Production,1013,Sheet Line Oprator,A,yes
+17,16,Marker_17_Unassigned,Unassigned,,,,no
+19,18,Marker_19_Unassigned,Unassigned,,,,no
+20,19,Marker_20_Unassigned,Unassigned,,,,no
+21,20,Amjad Ali,Production,D.W,Helper,B,yes
+22,21,Marker_22_Unassigned,Unassigned,,,,no
+23,22,Waqas Ali,House Keeping,1306,Cleaner,A,yes
+24,23,Zohaib Ali,Cleaning,D.W,House Keeping,A,yes
+25,24,Mamtaz Ali,Production,1284,Helper,B,yes
+26,25,Zaid Ali 1,Poping Candy,D.W,Helper,A,yes
+27,26,Marker_27_Unassigned,Unassigned,,,,no
+28,27,Marker_28_Unassigned,Unassigned,,,,no
+29,28,Marker_29_Unassigned,Unassigned,,,,no
+30,29,Iqbal,Production,1117,Paking Man,B,yes
+31,30,Marker_31_Unassigned,Unassigned,,,,no
+32,31,Parvaiz Ahmed,Production,1121,Machine Operator,A,yes
+33,32,Marker_33_Unassigned,Unassigned,,,,no
+34,33,Marker_34_Unassigned,Unassigned,,,,no
+35,34,Marker_35_Unassigned,Unassigned,,,,no
+36,35,Marker_36_Unassigned,Unassigned,,,,no
+39,38,Saleem,Production,1076,Sheet Line Oprator,,yes
+40,39,Marker_40_Unassigned,Unassigned,,,,no
+41,40,Marker_41_Unassigned,Unassigned,,,,no
+42,41,Marker_42_Unassigned,Unassigned,,,,no
+43,42,Marker_43_Unassigned,Unassigned,,,,no
+44,43,Gulam Qadir,Production,1018,Helper,A,yes
+45,44,Marker_45_Unassigned,Unassigned,,,,no
+46,45,Marker_46_Unassigned,Unassigned,,,,no
+47,46,Marker_47_Unassigned,Unassigned,,,,no
+48,47,Marker_48_Unassigned,Unassigned,,,,no
+49,48,Muharum,Production,1024,Helper,A,yes
+50,49,Wajahat Gul,Production,1201,Helper,A,yes

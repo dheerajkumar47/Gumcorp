@@ -92,7 +92,7 @@
         500
       ],
       "height_ft": null,
-      "notes": "Disabled until mixer camera is working/live.",
+      "notes": "Disabled for production load stability.",
       "calibration_points": {
         "camera_points": [],
         "map_points": []
@@ -116,7 +116,7 @@
         500
       ],
       "height_ft": null,
-      "notes": "Disabled until mixer camera is working/live.",
+      "notes": "Disabled for production load stability.",
       "calibration_points": {
         "camera_points": [],
         "map_points": []
@@ -140,7 +140,7 @@
         500
       ],
       "height_ft": null,
-      "notes": "Disabled until mixer camera is working/live.",
+      "notes": "Disabled for production load stability.",
       "calibration_points": {
         "camera_points": [],
         "map_points": []
@@ -164,7 +164,7 @@
         500
       ],
       "height_ft": null,
-      "notes": "Disabled until mixer camera is working/live.",
+      "notes": "Disabled for production load stability.",
       "calibration_points": {
         "camera_points": [],
         "map_points": []

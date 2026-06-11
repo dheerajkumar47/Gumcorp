@@ -5,11 +5,11 @@ param(
     [string]$Device = "cuda",
     [string]$CameraProfile = "main_stream",
     [ValidateSet("balanced", "speed", "quality")]
-    [string]$PerformanceProfile = "balanced",
+    [string]$PerformanceProfile = "speed",
     [int]$InferenceWidth = 1280,
-    [double]$ArucoZoom = 4.0,
+    [double]$ArucoZoom = 8.0,
     [double]$TargetFps = 10,
-    [int]$BatchSize = 6,
+    [int]$BatchSize = 8,
     [int]$RecordingRetentionDays = 7,
     [int]$LogRetentionDays = 7
 )

@@ -50,8 +50,9 @@ const DashboardApp = (() => {
     function cameraState(camera) {
         if (!camera) return { label: "OFFLINE", tone: "bad" };
         const seconds = Number(camera.stream_status?.seconds_since_frame || 0);
+        const staleAfter = Math.max(3, Number(state.data.runtime?.stale_camera_after_seconds || 30));
         if (!cameraOnline(camera)) return { label: "OFFLINE", tone: "bad" };
-        if (seconds > 3) return { label: "STALE", tone: "warn" };
+        if (seconds > staleAfter) return { label: "STALE", tone: "warn" };
         return { label: "ONLINE", tone: "good" };
     }
 
@@ -105,6 +106,16 @@ const DashboardApp = (() => {
             .sort((a, b) => b[1] - a[1])
             .map(([label, seconds]) => `<div class="row"><span>${escapeHtml(label)}</span><strong>${fmtSec(seconds)}</strong></div>`)
             .join("");
+    }
+
+    function totalSeconds(dataMap) {
+        return Object.values(dataMap || {}).reduce((total, value) => total + Number(value || 0), 0);
+    }
+
+    function workerActiveSeconds(worker) {
+        const cameraTotal = totalSeconds(worker.camera_times_sec);
+        const statusTotal = totalSeconds(worker.status_times_sec);
+        return Math.max(cameraTotal, statusTotal);
     }
 
     async function loadData() {
@@ -401,7 +412,7 @@ const DashboardApp = (() => {
                             <div class="metrics-row">
                                 <div class="mini-card"><strong>${Number(worker.total_distance_ft || 0).toFixed(1)}</strong><span>ft</span></div>
                                 <div class="mini-card"><strong>${Number(worker.person_conf || 0).toFixed(2)}</strong><span>conf</span></div>
-                                <div class="mini-card"><strong>${fmtSec(worker.last_seen_age)}</strong><span>seen</span></div>
+                                <div class="mini-card"><strong>${fmtSec(workerActiveSeconds(worker))}</strong><span>active</span></div>
                             </div>
                         </div>
                     </div>
@@ -481,7 +492,7 @@ const DashboardApp = (() => {
                         <div class="metrics-row">
                             <div class="mini-card"><strong>${Number(item.total_distance_ft || 0).toFixed(1)}</strong><span>ft</span></div>
                             <div class="mini-card"><strong>${Number(item.person_conf || 0).toFixed(2)}</strong><span>conf</span></div>
-                            <div class="mini-card"><strong>${fmtSec(item.last_seen_age)}</strong><span>seen</span></div>
+                            <div class="mini-card"><strong>${fmtSec(workerActiveSeconds(item))}</strong><span>active</span></div>
                         </div>
                     </div>
                 </div>
@@ -496,7 +507,7 @@ const DashboardApp = (() => {
                     <td><span class="pill ${workerTone(item.status)}">${escapeHtml(item.status || "ACTIVE")}</span></td>
                     <td>${escapeHtml(item.current_camera || "-")}</td>
                     <td>${Number(item.total_distance_ft || 0).toFixed(2)} ft</td>
-                    <td>${fmtSec(item.last_seen_age)}</td>
+                    <td>${fmtSec(workerActiveSeconds(item))}</td>
                 </tr>
             `).join("")
             : `<tr><td colspan="5">No employee records yet</td></tr>`;
@@ -547,7 +558,8 @@ const DashboardApp = (() => {
         setHtml("employee-detail-statuses", rowsFromMap(worker.status_times_sec));
         const currentCamera = (state.data.cameras || []).find((camera) => camera.id === worker.current_camera);
         const preview = document.getElementById("employee-live-preview");
-        setText("employee-recording-path", worker.path_view ? `${worker.path_view} (recording file finalizes after backend stops)` : "No recording");
+        const recordingPath = worker.proof_view || worker.path_view || "";
+        setText("employee-recording-path", recordingPath ? `${recordingPath} (proof video finalizes after backend stops)` : "No recording");
 
         const video = document.getElementById("employee-recording-video");
         if (preview && currentCamera?.live_view && cameraOnline(currentCamera)) {
