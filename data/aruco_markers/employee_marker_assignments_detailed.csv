@@ -1,9 +1,9 @@
 marker_id,opencv_marker_id,name,department,employee_code,designation,shift,active
 1,0,Marker_01_Unassigned,Unassigned,,,,no
 2,1,Marker_02_Unassigned,Unassigned,,,,no
-3,2,Marker_03_Unassigned,Unassigned,,,,no
+3,2,haleem,production,1240,Helper,A,yes
 4,3,Mamtaz,Production,1284,Helper,B,yes
-5,4,Marker_05_Unassigned,Unassigned,,,,no
+5,4,Zahid Ali,Production,D.W,Helper,A,yes
 6,5,Fazal Hussain,Production,1015,Paking Man,A,yes
 7,6,M.Hashim,Production,D.W,Helper,A,yes
 8,7,Marker_08_Unassigned,Unassigned,,,,no

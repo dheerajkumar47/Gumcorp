@@ -5,10 +5,10 @@ param(
     [string]$Device = "cuda",
     [string]$CameraProfile = "main_stream",
     [ValidateSet("balanced", "speed", "quality")]
-    [string]$PerformanceProfile = "speed",
+    [string]$PerformanceProfile = "quality",
     [int]$InferenceWidth = 1280,
     [double]$ArucoZoom = 8.0,
-    [double]$TargetFps = 10,
+    [double]$TargetFps = 12,
     [int]$BatchSize = 8,
     [int]$RecordingRetentionDays = 7,
     [int]$LogRetentionDays = 7
@@ -42,9 +42,9 @@ function Get-ProductionShift {
 $runDate = Get-Date -Format "yyyy-MM-dd"
 $activeShift = Get-ProductionShift -RequestedShift $Shift
 $productionRoot = Join-Path $RepoRoot "outputs\production"
-$recordingDir = Join-Path $productionRoot "recordings"
-$reportDir = Join-Path $productionRoot "reports"
-$logDir = Join-Path $productionRoot "logs"
+$recordingDir = Join-Path (Join-Path (Join-Path $productionRoot "recordings") $runDate) $activeShift
+$reportDir = Join-Path (Join-Path (Join-Path $productionRoot "reports") $runDate) $activeShift
+$logDir = Join-Path (Join-Path (Join-Path $productionRoot "logs") $runDate) $activeShift
 
 New-Item -ItemType Directory -Path $recordingDir -Force | Out-Null
 New-Item -ItemType Directory -Path $reportDir -Force | Out-Null

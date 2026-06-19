@@ -264,3 +264,28 @@ zones:
       width_ft: 35.0
       height_ft: 52.0
       source: user_corrected_dimension
+
+# ── User-defined zones from floor plan picker (2026-06-19) ─────────────────
+user_defined_zones:
+  - id: total_area
+    label: Total Working Area
+    polygon_px: [[2677,669],[2677,1658],[3609,1647],[3609,669]]
+    source: user_floor_plan_picker
+
+  - id: production_area
+    label: Production Area
+    polygon_px: [[2680,1658],[3299,1654],[3296,783],[3242,679],[3064,676],[3068,761],[2997,765],[2983,936],[2684,932]]
+    cameras: [sheetline, main_production, palletline, d45, d46, d47, d48, gc_production2]
+    source: user_floor_plan_picker
+
+  - id: mixtures_area
+    label: Mixtures Area
+    polygon_px: [[3317,1647],[3609,1644],[3609,687],[3324,679]]
+    cameras: [mixer1, mixer2, mixer3, mixer4]
+    source: user_floor_plan_picker
+
+  - id: cooling_room2_user
+    label: Cooling Room 2
+    polygon_px: [[2680,679],[2968,683],[2968,918],[2684,907]]
+    cameras: [coolingroom2]
+    source: user_floor_plan_picker

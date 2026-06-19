@@ -1,20 +1,18 @@
-# Factory AI Tracking System Configuration
-# Module 1 & 2 Implementation
-
 system:
-  name: "Factory AI Tracking System"
-  version: "1.0.0"
-  factory: "Gumcorp Factory"
+  name: Factory AI Tracking System
+  version: 1.0.0
+  factory: Gumcorp Factory
   total_area_sqm: 1824
-  debug: true
+  debug: false
   fps_target: 15
-
 runtime:
-  camera_profile: "main_stream"
+  camera_profile: main_stream
+  tracker_backend: botsort
+  botsort_tracker_yaml: botsort.yaml
   inference_width: 1280
   aruco_max_width: 1920
   aruco_every_n_frames: 2
-  aruco_workers: 2
+  aruco_workers: 4
   aruco_crop_first_enabled: true
   aruco_crop_zoom: 4.0
   aruco_crop_margin_ratio: 0.15
@@ -26,276 +24,408 @@ runtime:
   path_video_every_n_frames: 6
   path_video_fps: 2.5
   path_video_min_frames: 2
-  path_video_codec: "mp4v"
+  path_video_codec: mp4v
   redirect_decoder_logs: true
-  decoder_log_file: "logs/decoder_ffmpeg.log"
+  decoder_log_file: logs/decoder_ffmpeg.log
   monitor_interval_seconds: 2.0
   reconnect_after: 45
   reconnect_interval_seconds: 3.0
   stale_camera_after_seconds: 30.0
-  marker_confirmations_required: 1
+  marker_confirmations_required: 2
+  unassigned_marker_confirmations_required: 10
+  marker_instant_lock_score: 90000.0
   marker_stale_after_seconds: 8.0
   marker_hidden_grace_seconds: 90.0
-  marker_hidden_match_radius_px: 220.0
+  marker_hidden_match_radius_px: 160.0
   marker_hidden_max_seconds: 90.0
-  marker_hidden_min_iou: 0.02
+  marker_hidden_min_iou: 0.08
+  tracker_confidence_threshold: 0.14
+  display_confidence_threshold: 0.22
+  track_binding_ttl_seconds: 120
+  identity_continuation_max_seconds: 25
+  identity_continuation_min_confidence: 0.28
+  single_person_continuation_max_seconds: 120
+  assigned_min_marker_area: 18
+  unassigned_min_marker_area: 80
+  ignored_opencv_marker_ids:
+  - 17
   tracker_iou_threshold: 0.12
   tracker_center_radius_px: 180.0
   tracker_max_age_seconds: 6.0
-  reid_match_threshold: 0.72
+  reid_match_threshold: 0.74
   reid_max_gap_seconds: 45.0
   person_box_margin: 0.15
   min_marker_area: 60
-  activity_upper_motion_threshold: 0.026
-  activity_gesture_motion_threshold: 0.018
+  activity_upper_motion_threshold: 0.1
+  activity_gesture_motion_threshold: 0.055
   activity_idle_after_seconds: 20.0
-  employee_records_file: "logs/employee_records.json"
+  employee_records_file: logs/employee_records.json
   jpeg_quality_live: 82
-  camera_registry_file: "data/cameras.json"
-
+  camera_registry_file: data/cameras.json
 camera_profiles:
   main_stream:
-    resolution: "1920x1080"
+    resolution: 1920x1080
     fps: 15
     bitrate: 1025
-    codec: "h264"
+    codec: h264
   sub_stream:
-    resolution: "720x576"
+    resolution: 720x576
     fps: 15
     bitrate: 512
-
-# Camera Configuration
 cameras:
-  - id: "sheetline"
-    video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30302/unicast/c1/s1/live"
-    stream_profiles:
-      main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30302/unicast/c1/s1/live"
-      sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30302/unicast/c1/s1/live"
-    #video_path: "data/videos/Sample 1.mp4"
-    enabled: true
-    position: [100, 100]
-    calibration_points:
-      camera_points: []
-      map_points: []
-  
-  - id: "palletline"
-    video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30292/unicast/c1/s1/live"
-    stream_profiles:
-      main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30292/unicast/c1/s1/live"
-      sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30292/unicast/c1/s1/live"
-    enabled: true
-    position: [500, 100]
-    calibration_points:
-      camera_points: []
-      map_points: []
-
-  - id: "coolingroom2"
-    video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30282/unicast/c1/s1/live"
-    stream_profiles:
-      main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30282/unicast/c1/s1/live"
-      sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30282/unicast/c1/s1/live"
-    enabled: true
-    position: [900, 100]
-    calibration_points:
-      camera_points: []
-      map_points: []
-
-  - id: "mixer1"
-    video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30312/unicast/c1/s1/live"
-    stream_profiles:
-      main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30312/unicast/c1/s1/live"
-      sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30312/unicast/c1/s1/live"
-    enabled: true
-    position: [100, 500]
-    calibration_points:
-      camera_points: []
-      map_points: []
-
-  - id: "mixer2"
-    video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30322/unicast/c1/s1/live"
-    stream_profiles:
-      main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30322/unicast/c1/s1/live"
-      sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30322/unicast/c1/s1/live"
-    enabled: true
-    position: [500, 500]
-    calibration_points:
-      camera_points: []
-      map_points: []
-
-  - id: "mixer3"
-    video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30332/unicast/c1/s1/live"
-    stream_profiles:
-      main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30332/unicast/c1/s1/live"
-      sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30332/unicast/c1/s1/live"
-    enabled: true
-    position: [900, 500]
-    calibration_points:
-      camera_points: []
-      map_points: []
-
-  - id: "mixer4"
-    video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30342/unicast/c1/s1/live"
-    stream_profiles:
-      main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30342/unicast/c1/s1/live"
-      sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30342/unicast/c1/s1/live"
-    enabled: true
-    position: [1300, 500]
-    calibration_points:
-      camera_points: []
-      map_points: []
-
-  - id: "production2"
-    video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30182/unicast/c1/s1/live"
-    stream_profiles:
-      main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30182/unicast/c1/s1/live"
-      sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30182/unicast/c1/s1/live"
-    enabled: true
-    position: [100, 900]
-    calibration_points:
-      camera_points: []
-      map_points: []
-
-  - id: "production_outside"
-    video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30172/unicast/c1/s1/live"
-    stream_profiles:
-      main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30172/unicast/c1/s1/live"
-      sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30172/unicast/c1/s1/live"
-    enabled: true
-    position: [500, 900]
-    calibration_points:
-      camera_points: []
-      map_points: []
-
-  - id: "main_production"
-    video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30272/unicast/c1/s1/live"
-    stream_profiles:
-      main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30272/unicast/c1/s1/live"
-      sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30272/unicast/c1/s1/live"
-    enabled: true
-    position: [900, 900]
-    calibration_points:
-      camera_points: []
-      map_points: []
-
-  - id: "d45"
-    label: "sheetline 2"
-    zone: "sheetline"
-    role: "sheetline2"
-    video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30442/unicast/c1/s1/live"
-    stream_profiles:
-      main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30442/unicast/c1/s1/live"
-      sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30442/unicast/c1/s1/live"
-    enabled: true
-    position: [3288, 1144]
-    calibration_points:
-      camera_points: []
-      map_points: []
-
-  - id: "d46"
-    label: "pallet line 2"
-    zone: "palletline"
-    role: "palletline2"
-    video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30452/unicast/c1/s1/live"
-    stream_profiles:
-      main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30452/unicast/c1/s1/live"
-      sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30452/unicast/c1/s1/live"
-    enabled: true
-    position: [3291, 1171]
-    calibration_points:
-      camera_points: []
-      map_points: []
-
-  - id: "d47"
-    label: "main production 2"
-    zone: "main_production"
-    role: "main_production2"
-    video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30462/unicast/c1/s1/live"
-    stream_profiles:
-      main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30462/unicast/c1/s1/live"
-      sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30462/unicast/c1/s1/live"
-    enabled: true
-    position: [2985, 928]
-    calibration_points:
-      camera_points: []
-      map_points: []
-
-  - id: "d48"
-    label: "inside sheetline"
-    zone: "sheetline"
-    role: "inside_sheetline"
-    video_path: "rtsp://admin:Lion%2334Run@172.16.7.10:30472/unicast/c1/s1/live"
-    stream_profiles:
-      main_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30472/unicast/c1/s1/live"
-      sub_stream: "rtsp://admin:Lion%2334Run@172.16.7.10:30472/unicast/c1/s1/live"
-    enabled: true
-    position: [3318, 1054]
-    calibration_points:
-      camera_points: []
-      map_points: []
-
-# Detection Settings (YOLOv8)
+- id: sheetline
+  video_path: rtsp://admin:Lion%2334Run@172.16.7.10:30302/unicast/c1/s1/live
+  stream_profiles:
+    main_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30302/unicast/c1/s1/live
+    sub_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30302/unicast/c1/s1/live
+  enabled: true
+  position:
+  - 100
+  - 100
+  calibration_points:
+    camera_points: []
+    map_points:
+    - - 3064
+      - 762
+    - - 2997
+      - 861
+    - - 3235
+      - 794
+    - - 3235
+      - 897
+    - - 2993
+      - 1025
+    - - 3107
+      - 1132
+- id: palletline
+  video_path: rtsp://admin:Lion%2334Run@172.16.7.10:30292/unicast/c1/s1/live
+  stream_profiles:
+    main_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30292/unicast/c1/s1/live
+    sub_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30292/unicast/c1/s1/live
+  enabled: true
+  position:
+  - 500
+  - 100
+  calibration_points:
+    camera_points: []
+    map_points:
+    - - 3015
+      - 1438
+    - - 3079
+      - 1431
+    - - 3135
+      - 1441
+    - - 3182
+      - 1487
+    - - 3192
+      - 1569
+    - - 3235
+      - 1576
+    - - 3114
+      - 1623
+    - - 3015
+      - 1552
+- id: coolingroom2
+  video_path: rtsp://admin:Lion%2334Run@172.16.7.10:30282/unicast/c1/s1/live
+  stream_profiles:
+    main_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30282/unicast/c1/s1/live
+    sub_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30282/unicast/c1/s1/live
+  enabled: false
+  position:
+  - 900
+  - 100
+  calibration_points:
+    camera_points: []
+    map_points: []
+- id: mixer1
+  video_path: rtsp://admin:Lion%2334Run@172.16.7.10:30312/unicast/c1/s1/live
+  stream_profiles:
+    main_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30312/unicast/c1/s1/live
+    sub_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30312/unicast/c1/s1/live
+  enabled: true
+  position:
+  - 100
+  - 500
+  calibration_points:
+    camera_points: []
+    map_points: []
+- id: mixer2
+  video_path: rtsp://admin:Lion%2334Run@172.16.7.10:30322/unicast/c1/s1/live
+  stream_profiles:
+    main_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30322/unicast/c1/s1/live
+    sub_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30322/unicast/c1/s1/live
+  enabled: true
+  position:
+  - 500
+  - 500
+  calibration_points:
+    camera_points: []
+    map_points: []
+- id: mixer3
+  video_path: rtsp://admin:Lion%2334Run@172.16.7.10:30332/unicast/c1/s1/live
+  stream_profiles:
+    main_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30332/unicast/c1/s1/live
+    sub_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30332/unicast/c1/s1/live
+  enabled: true
+  position:
+  - 900
+  - 500
+  calibration_points:
+    camera_points: []
+    map_points:
+    - - 3328
+      - 1427
+    - - 3324
+      - 1473
+    - - 3409
+      - 1480
+    - - 3402
+      - 1395
+    - - 3449
+      - 1409
+    - - 3470
+      - 1466
+- id: mixer4
+  video_path: rtsp://admin:Lion%2334Run@172.16.7.10:30342/unicast/c1/s1/live
+  stream_profiles:
+    main_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30342/unicast/c1/s1/live
+    sub_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30342/unicast/c1/s1/live
+  enabled: true
+  position:
+  - 1300
+  - 500
+  calibration_points:
+    camera_points: []
+    map_points: []
+- id: production2
+  video_path: rtsp://admin:Lion%2334Run@172.16.7.10:30182/unicast/c1/s1/live
+  stream_profiles:
+    main_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30182/unicast/c1/s1/live
+    sub_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30182/unicast/c1/s1/live
+  enabled: false
+  position:
+  - 100
+  - 900
+  calibration_points:
+    camera_points: []
+    map_points: []
+- id: production_outside
+  video_path: rtsp://admin:Lion%2334Run@172.16.7.10:30172/unicast/c1/s1/live
+  stream_profiles:
+    main_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30172/unicast/c1/s1/live
+    sub_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30172/unicast/c1/s1/live
+  enabled: false
+  position:
+  - 500
+  - 900
+  calibration_points:
+    camera_points: []
+    map_points: []
+- id: main_production
+  video_path: rtsp://admin:Lion%2334Run@172.16.7.10:30272/unicast/c1/s1/live
+  stream_profiles:
+    main_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30272/unicast/c1/s1/live
+    sub_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30272/unicast/c1/s1/live
+  enabled: true
+  position:
+  - 900
+  - 900
+  calibration_points:
+    camera_points: []
+    map_points:
+    - - 2694
+      - 1242
+    - - 2965
+      - 1253
+    - - 2958
+      - 1608
+    - - 2684
+      - 1601
+- id: d45
+  label: sheetline 2
+  zone: sheetline
+  role: sheetline2
+  video_path: rtsp://admin:Lion%2334Run@172.16.7.10:30442/unicast/c1/s1/live
+  stream_profiles:
+    main_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30442/unicast/c1/s1/live
+    sub_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30442/unicast/c1/s1/live
+  enabled: true
+  position:
+  - 3288
+  - 1144
+  calibration_points:
+    camera_points: []
+    map_points:
+    - - 3274
+      - 1021
+    - - 3178
+      - 1018
+    - - 3114
+      - 940
+    - - 3011
+      - 922
+    - - 3007
+      - 1064
+    - - 3178
+      - 1153
+    - - 3278
+      - 1150
+- id: d46
+  label: pallet line 2
+  zone: palletline
+  role: palletline2
+  video_path: rtsp://admin:Lion%2334Run@172.16.7.10:30452/unicast/c1/s1/live
+  stream_profiles:
+    main_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30452/unicast/c1/s1/live
+    sub_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30452/unicast/c1/s1/live
+  enabled: true
+  position:
+  - 3291
+  - 1171
+  calibration_points:
+    camera_points: []
+    map_points:
+    - - 3121
+      - 1214
+    - - 3281
+      - 1210
+    - - 3281
+      - 1381
+    - - 3121
+      - 1381
+    - - 2990
+      - 1267
+    - - 2993
+      - 1367
+    - - 3164
+      - 1502
+- id: d47
+  label: main production 2
+  zone: main_production
+  role: main_production2
+  video_path: rtsp://admin:Lion%2334Run@172.16.7.10:30462/unicast/c1/s1/live
+  stream_profiles:
+    main_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30462/unicast/c1/s1/live
+    sub_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30462/unicast/c1/s1/live
+  enabled: true
+  position:
+  - 2985
+  - 928
+  calibration_points:
+    camera_points: []
+    map_points:
+    - - 3089
+      - 1011
+    - - 3185
+      - 1039
+    - - 3178
+      - 1153
+    - - 3153
+      - 1242
+    - - 3071
+      - 1167
+    - - 2997
+      - 1139
+    - - 2983
+      - 1046
+- id: d48
+  label: inside sheetline
+  zone: sheetline
+  role: inside_sheetline
+  video_path: rtsp://admin:Lion%2334Run@172.16.7.10:30472/unicast/c1/s1/live
+  stream_profiles:
+    main_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30472/unicast/c1/s1/live
+    sub_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30472/unicast/c1/s1/live
+  enabled: true
+  position:
+  - 3318
+  - 1054
+  calibration_points:
+    camera_points: []
+    map_points:
+    - - 3320
+      - 1014
+    - - 3438
+      - 1011
+    - - 3466
+      - 1068
+    - - 3406
+      - 1093
+    - - 3320
+      - 1096
 detection:
-  model_path: "models/yolo11m.pt"
-  confidence_threshold: 0.28
+  model_path: models/yolo11m.pt
+  confidence_threshold: 0.20
   iou_threshold: 0.45
-  classes: [0]
-
-# ArUco Settings
+  classes:
+  - 0
 aruco:
-  dictionary_type: "DICT_4X4_50"
+  dictionary_type: DICT_4X4_50
   marker_size_mm: 50.0
   detection_confidence: 0.8
-
-# Mapping Settings (Homography)
 mapping:
-  floor_plan_path: "docs/camera_layout_rev02.pdf"
-  annotated_layout_path: "docs/marking.jpg"
-  spatial_seed_path: "data/factory_map/production_layout_seed.yaml"
-  floor_plan_analysis: "./floor_plan_analysis.json"
-  coordinate_origin: [0, 0]
-  scale_factor: 50.0  # pixels per meter (50px = 1m)
+  floor_plan_path: docs/camera_layout_rev02.pdf
+  annotated_layout_path: docs/marking.jpg
+  spatial_seed_path: data/factory_map/production_layout_seed.yaml
+  floor_plan_analysis: ./floor_plan_analysis.json
+  coordinate_origin:
+  - 0
+  - 0
+  scale_factor: 50.0
   ransac_reproj_threshold: 3.0
-
-# Tracking Settings
 tracking:
   max_history_length: 100
   distance_threshold: 50.0
   missing_frame_threshold: 10
-  fusion_method: "average"
-
-# Behavior Analysis Settings
+  fusion_method: average
 behavior:
   idle_time_threshold: 30
   walking_speed_threshold: 10.0
   carrying_proximity_threshold: 100.0
   machine_interaction_threshold: 20.0
-
-# Zone Definitions
 zones:
   loading_bay:
-    name: "Loading Bay"
-    color: [139, 69, 19]
-    polygon: [[100, 400], [700, 400], [700, 1100], [100, 1100]]
+    name: Loading Bay
+    color:
+    - 139
+    - 69
+    - 19
+    polygon:
+    - - 100
+      - 400
+    - - 700
+      - 400
+    - - 700
+      - 1100
+    - - 100
+      - 1100
   packing_area:
-    name: "Packing Area"
-    color: [135, 206, 235]
-    polygon: [[700, 400], [1400, 400], [1400, 1100], [700, 1100]]
-
-# Logging Settings
+    name: Packing Area
+    color:
+    - 135
+    - 206
+    - 235
+    polygon:
+    - - 700
+      - 400
+    - - 1400
+      - 400
+    - - 1400
+      - 1100
+    - - 700
+      - 1100
 logging:
   enabled: true
-  log_level: "INFO"
-  log_file: "logs/factory_tracking.log"
-  csv_log_file: "logs/tracking_data.csv"
-  live_data_file: "logs/live_stats.json" 
+  log_level: INFO
+  log_file: logs/factory_tracking.log
+  csv_log_file: logs/tracking_data.csv
+  live_data_file: logs/live_stats.json
   save_annotations: true
-  annotation_output_path: "outputs/annotated_videos/"
-
-# Output Settings
+  annotation_output_path: outputs/annotated_videos/
 output:
   show_display: true
   display_width: 1280
   display_height: 720
   save_video: false
-  output_video_path: "outputs/tracked_output.mp4"
+  output_video_path: outputs/tracked_output.mp4
   fps: 15

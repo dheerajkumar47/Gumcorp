@@ -8,6 +8,7 @@ $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $productionRoot = Join-Path $RepoRoot "outputs\production"
 $recordingsRoot = Join-Path $productionRoot "recordings"
 $logsRoot = Join-Path $productionRoot "logs"
+$reportsRoot = Join-Path $productionRoot "reports"
 
 function Remove-OldDateFolders {
     param(
@@ -34,3 +35,4 @@ function Remove-OldDateFolders {
 
 Remove-OldDateFolders -Root $recordingsRoot -KeepDays $RecordingDays
 Remove-OldDateFolders -Root $logsRoot -KeepDays $LogDays
+Remove-OldDateFolders -Root $reportsRoot -KeepDays $LogDays

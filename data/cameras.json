@@ -55,7 +55,7 @@
       "label": "coolingroom2",
       "zone": "",
       "role": "coolingroom2",
-      "enabled": true,
+      "enabled": false,
       "video_path": "rtsp://admin:Lion%2334Run@172.16.7.10:30282/unicast/c1/s1/live",
       "stream_profiles": {
         "main_stream": "rtsp://admin:Lion%2334Run@172.16.7.10:30282/unicast/c1/s1/live",
@@ -127,7 +127,7 @@
       "label": "mixer3",
       "zone": "",
       "role": "mixer3",
-      "enabled": false,
+      "enabled": true,
       "video_path": "rtsp://admin:Lion%2334Run@172.16.7.10:30332/unicast/c1/s1/live",
       "stream_profiles": {
         "main_stream": "rtsp://admin:Lion%2334Run@172.16.7.10:30332/unicast/c1/s1/live",
@@ -140,7 +140,7 @@
         500
       ],
       "height_ft": null,
-      "notes": "Disabled for production load stability.",
+      "notes": "Enabled for production testing.",
       "calibration_points": {
         "camera_points": [],
         "map_points": []
@@ -175,7 +175,7 @@
       "label": "production2",
       "zone": "",
       "role": "production2",
-      "enabled": true,
+      "enabled": false,
       "video_path": "rtsp://admin:Lion%2334Run@172.16.7.10:30182/unicast/c1/s1/live",
       "stream_profiles": {
         "main_stream": "rtsp://admin:Lion%2334Run@172.16.7.10:30182/unicast/c1/s1/live",
@@ -188,7 +188,7 @@
         900
       ],
       "height_ft": null,
-      "notes": "",
+      "notes": "Disabled by operator request: GC Production 2 camera.",
       "calibration_points": {
         "camera_points": [],
         "map_points": []
@@ -199,7 +199,7 @@
       "label": "production_outside",
       "zone": "",
       "role": "production_outside",
-      "enabled": true,
+      "enabled": false,
       "video_path": "rtsp://admin:Lion%2334Run@172.16.7.10:30172/unicast/c1/s1/live",
       "stream_profiles": {
         "main_stream": "rtsp://admin:Lion%2334Run@172.16.7.10:30172/unicast/c1/s1/live",

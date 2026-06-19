@@ -16,6 +16,18 @@ class ArUcoDetector:
         aruco_dict = getattr(cv2.aruco, dictionary_type)
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(aruco_dict)
         self.aruco_params = cv2.aruco.DetectorParameters()
+
+        # Tuned for factory use: smaller markers at distance, shadowed environments
+        self.aruco_params.adaptiveThreshWinSizeMin = 3    # default 7 — catches small/far markers
+        self.aruco_params.adaptiveThreshWinSizeMax = 23
+        self.aruco_params.adaptiveThreshWinSizeStep = 4
+        self.aruco_params.adaptiveThreshConstant = 7
+        self.aruco_params.minMarkerPerimeterRate = 0.02   # default 0.05 — allows smaller markers
+        self.aruco_params.maxMarkerPerimeterRate = 4.0
+        self.aruco_params.polygonalApproxAccuracyRate = 0.04
+        self.aruco_params.minCornerDistanceRate = 0.02
+        self.aruco_params.errorCorrectionRate = 0.9       # slightly more forgiving bit errors
+
         self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
         self.marker_size_mm = marker_size_mm
         

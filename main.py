@@ -8,6 +8,7 @@ import time
 import threading
 import argparse
 import concurrent.futures
+import csv
 import numpy as np
 from pathlib import Path
 from datetime import datetime
@@ -174,11 +175,19 @@ def get_runtime_config(config, args):
         "reconnect_interval_seconds": float(runtime.get("reconnect_interval_seconds", 5.0)),
         "stale_camera_after_seconds": float(runtime.get("stale_camera_after_seconds", 3.0)),
         "marker_confirmations_required": max(1, int(runtime.get("marker_confirmations_required", 2))),
+        "unassigned_marker_confirmations_required": max(1, int(runtime.get("unassigned_marker_confirmations_required", 10))),
+        "marker_instant_lock_score": float(runtime.get("marker_instant_lock_score", 90000.0)),
         "marker_stale_after_seconds": float(runtime.get("marker_stale_after_seconds", 8.0)),
         "marker_hidden_grace_seconds": float(runtime.get("marker_hidden_grace_seconds", 12.0)),
         "marker_hidden_match_radius_px": float(runtime.get("marker_hidden_match_radius_px", 180.0)),
         "marker_hidden_max_seconds": float(runtime.get("marker_hidden_max_seconds", 4.0)),
         "marker_hidden_min_iou": float(runtime.get("marker_hidden_min_iou", 0.08)),
+        "tracker_confidence_threshold": float(runtime.get("tracker_confidence_threshold", 0.16)),
+        "display_confidence_threshold": float(runtime.get("display_confidence_threshold", config.get("detection", {}).get("confidence_threshold", 0.25))),
+        "track_binding_ttl_seconds": float(runtime.get("track_binding_ttl_seconds", 12.0)),
+        "identity_continuation_max_seconds": float(runtime.get("identity_continuation_max_seconds", 20.0)),
+        "identity_continuation_min_confidence": float(runtime.get("identity_continuation_min_confidence", 0.35)),
+        "single_person_continuation_max_seconds": float(runtime.get("single_person_continuation_max_seconds", 180.0)),
         "tracker_iou_threshold": float(runtime.get("tracker_iou_threshold", 0.12)),
         "tracker_center_radius_px": float(runtime.get("tracker_center_radius_px", 180.0)),
         "tracker_max_age_seconds": float(runtime.get("tracker_max_age_seconds", 6.0)),
@@ -189,10 +198,15 @@ def get_runtime_config(config, args):
         "activity_gesture_motion_threshold": float(runtime.get("activity_gesture_motion_threshold", 0.018)),
         "activity_idle_after_seconds": float(runtime.get("activity_idle_after_seconds", 20.0)),
         "min_marker_area": float(runtime.get("min_marker_area", 80.0)),
+        "assigned_min_marker_area": float(runtime.get("assigned_min_marker_area", runtime.get("min_marker_area", 80.0))),
+        "unassigned_min_marker_area": float(runtime.get("unassigned_min_marker_area", max(float(runtime.get("min_marker_area", 80.0)), 120.0))),
+        "ignored_opencv_marker_ids": {int(marker_id) for marker_id in runtime.get("ignored_opencv_marker_ids", [])},
         "employee_records_file": os.path.join(log_dir, "employee_records.json"),
         "camera_registry_file": args.camera_registry or runtime.get("camera_registry_file", "data/cameras.json"),
         "debug_mode": bool(config.get("system", {}).get("debug", False)),
         "performance_profile": args.performance_profile or runtime.get("performance_profile", "balanced"),
+        "tracker_backend": str(runtime.get("tracker_backend", "botsort")).strip().lower(),
+        "botsort_tracker_yaml": str(runtime.get("botsort_tracker_yaml", "botsort.yaml")),
     }
 
 def select_devices(requested_device):
@@ -275,8 +289,8 @@ def apply_performance_profile(runtime):
         runtime["target_fps"] = min(runtime["target_fps"], 12.0)
         runtime["batch_size"] = max(runtime["batch_size"], 8)
         runtime["aruco_max_width"] = min(runtime["aruco_max_width"], 1280)
-        runtime["aruco_crop_zoom"] = max(runtime["aruco_crop_zoom"], 8.0)
-        runtime["aruco_every_n_frames"] = max(3, min(4, int(runtime["aruco_every_n_frames"])))
+        runtime["aruco_crop_zoom"] = max(runtime["aruco_crop_zoom"], 6.0)
+        runtime["aruco_every_n_frames"] = max(1, min(2, int(runtime["aruco_every_n_frames"])))
         runtime["aruco_workers"] = max(2, min(runtime["aruco_workers"], 2))
         runtime["aruco_full_frame_fallback"] = False
         runtime["dashboard_image_width"] = min(runtime["dashboard_image_width"], 960)
@@ -370,24 +384,38 @@ def aruco_detector_params():
     params.adaptiveThreshWinSizeMin = 3
     params.adaptiveThreshWinSizeMax = 53
     params.adaptiveThreshWinSizeStep = 4
-    params.minMarkerPerimeterRate = 0.015
+    params.adaptiveThreshConstant = 10    # bright/white dusty backgrounds
+    params.minMarkerPerimeterRate = 0.012  # detect smaller/farther markers
     params.maxMarkerPerimeterRate = 4.0
-    params.polygonalApproxAccuracyRate = 0.035
-    params.errorCorrectionRate = 0.8
+    params.polygonalApproxAccuracyRate = 0.08  # accept distorted quads (overhead angle = parallelogram)
+    params.minCornerDistanceRate = 0.01        # corners can be close (flattened marker from above)
+    params.perspectiveRemoveIgnoredMarginPerCell = 0.05  # tighter margin = better bit read on angled markers
+    params.errorCorrectionRate = 0.9       # tolerate 1-bit errors from perspective distortion
     return params
 
 def detect_markers_with_variants(detector, gray):
-    variants = [gray, cv2.equalizeHist(gray)]
+    # Variants tuned for overhead cameras + bright/dusty factory environment.
+    # Each entry is (image, scale_x, scale_y) — scale factors map detected corners
+    # BACK to the original gray coordinate space before returning.
+    # Stretched variants compensate for overhead/angled cameras that foreshorten markers.
+    h, w = gray.shape[:2]
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    variants.append(clahe.apply(gray))
-    variants.append(cv2.filter2D(gray, -1, np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)))
-    variants.append(cv2.GaussianBlur(gray, (5, 5), 0))
+    sharp = cv2.filter2D(gray, -1, np.array([[0,-1,0],[-1,5,-1],[0,-1,0]], dtype=np.float32))
+    variants = [
+        (gray,                                                              1.0,      1.0),
+        (cv2.equalizeHist(gray),                                            1.0,      1.0),
+        (clahe.apply(gray),                                                 1.0,      1.0),
+        (sharp,                                                             1.0,      1.0),
+        (cv2.resize(gray,  (w, int(h * 2.0)), interpolation=cv2.INTER_LINEAR), 1.0,  1/2.0),
+        (cv2.resize(gray,  (int(w * 2.0), h), interpolation=cv2.INTER_LINEAR), 1/2.0, 1.0),
+        (cv2.resize(sharp, (w, int(h * 1.6)), interpolation=cv2.INTER_LINEAR), 1.0,  1/1.6),
+    ]
 
     seen = set()
     merged_corners = []
     merged_ids = []
-    for variant in variants:
-        corners, ids, _ = detector.detectMarkers(variant)
+    for variant_img, sx, sy in variants:
+        corners, ids, _ = detector.detectMarkers(variant_img)
         if ids is None:
             continue
         for marker_id, marker_corners in zip(ids.flatten(), corners):
@@ -395,15 +423,43 @@ def detect_markers_with_variants(detector, gray):
             if marker_id in seen:
                 continue
             seen.add(marker_id)
-            merged_corners.append(marker_corners)
+            # Scale corners back to original gray coordinate space
+            if sx != 1.0 or sy != 1.0:
+                mc = marker_corners.copy().astype(np.float32)
+                mc[0, :, 0] *= sx
+                mc[0, :, 1] *= sy
+                merged_corners.append(mc)
+            else:
+                merged_corners.append(marker_corners)
             merged_ids.append(marker_id)
     if not merged_ids:
         return None, None
     return tuple(merged_corners), np.array([[marker_id] for marker_id in merged_ids], dtype=np.int32)
 
-def detect_aruco_in_person_crops(aruco_dict, frame, person_boxes, zoom_scale, margin_ratio, min_marker_area, debug=False):
+def marker_area_threshold(marker_id, assigned_marker_ids, assigned_min_marker_area, unassigned_min_marker_area):
+    return assigned_min_marker_area if int(marker_id) in assigned_marker_ids else unassigned_min_marker_area
+
+
+def detect_aruco_in_person_crops(
+    aruco_dict,
+    frame,
+    person_boxes,
+    zoom_scale,
+    margin_ratio,
+    min_marker_area,
+    debug=False,
+    assigned_marker_ids=None,
+    assigned_min_marker_area=None,
+    unassigned_min_marker_area=None,
+    ignored_marker_ids=None,
+    pos_hints=None,   # dict: track_id -> rel_y (0..1) of last seen marker within person bbox
+):
     if not person_boxes:
         return None, None, {}
+    assigned_marker_ids = assigned_marker_ids or set()
+    ignored_marker_ids = ignored_marker_ids or set()
+    assigned_min_marker_area = min_marker_area if assigned_min_marker_area is None else assigned_min_marker_area
+    unassigned_min_marker_area = min_marker_area if unassigned_min_marker_area is None else unassigned_min_marker_area
     height, width = frame.shape[:2]
     try:
         detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_detector_params())
@@ -422,9 +478,53 @@ def detect_aruco_in_person_crops(aruco_dict, frame, person_boxes, zoom_scale, ma
             cx1 = max(0, int(round(x1 - pad_x)))
             cy1 = max(0, int(round(y1 - pad_y)))
             cx2 = min(width, int(round(x2 + pad_x)))
-            cy2 = min(height, int(round(y2 + pad_y)))
+            # Markers on chest/back/elbows — search upper 88% (covers bent/crouching workers).
+            cy2 = min(height, int(round(y1 + box_h * 0.88 + pad_y)))
             if cx2 - cx1 < 20 or cy2 - cy1 < 30:
                 continue
+
+            # ── ROI hint fast-path ─────────────────────────────────────────
+            # If we know where the marker was last frame (rel_y within bbox),
+            # try a narrow horizontal strip first — 5x less area to scan.
+            track_id = person.get("track_id") or person.get("global_id")
+            hint_rel_y = (pos_hints or {}).get(track_id)
+            if hint_rel_y is not None:
+                full_h = cy2 - cy1
+                sy1 = max(cy1, int(cy1 + (hint_rel_y - 0.20) * full_h))
+                sy2 = min(cy2, int(cy1 + (hint_rel_y + 0.20) * full_h))
+                if sy2 - sy1 > 12 and cx2 - cx1 > 12:
+                    strip = frame[sy1:sy2, cx1:cx2]
+                    if strip.size > 0:
+                        zs = cv2.resize(strip, None, fx=zoom_scale, fy=zoom_scale,
+                                        interpolation=cv2.INTER_CUBIC)
+                        gs = cv2.cvtColor(zs, cv2.COLOR_BGR2GRAY)
+                        sc, si = detect_markers_with_variants(detector, gs)
+                        if si is not None:
+                            for mid, mc in zip(si.flatten(), sc):
+                                if int(mid) in ignored_marker_ids:
+                                    continue
+                                pts_z = mc[0].astype(np.float32)
+                                area = float(cv2.contourArea(pts_z)) / (zoom_scale * zoom_scale)
+                                if area < marker_area_threshold(mid, assigned_marker_ids,
+                                                                assigned_min_marker_area,
+                                                                unassigned_min_marker_area):
+                                    continue
+                                pts_f = (pts_z / zoom_scale) + np.array([cx1, sy1], dtype=np.float32)
+                                if not marker_quality_ok(pts_f, person["bbox"], min_side_px=8.0):
+                                    continue
+                                mc_xy = pts_f.mean(axis=0)
+                                if not expanded_contains(person["bbox"], mc_xy, 0.0):
+                                    continue
+                                candidates.append({
+                                    "marker_id": int(mid), "corners": pts_f,
+                                    "person": person, "person_index": person_index,
+                                    "score": 100000.0 + area - bbox_area(person["bbox"]) * 0.0001,
+                                })
+                                crop_detections_log.append(
+                                    f"Person {person_index}: hint-strip found marker {int(mid)}")
+                            if candidates and any(c["person_index"] == person_index for c in candidates):
+                                continue   # found via fast-path — skip full crop
+            # ── end ROI hint ───────────────────────────────────────────────
 
             crop = frame[cy1:cy2, cx1:cx2]
             if crop.size == 0:
@@ -435,14 +535,23 @@ def detect_aruco_in_person_crops(aruco_dict, frame, person_boxes, zoom_scale, ma
             if crop_ids is None:
                 crop_detections_log.append(f"Person {person_index}: no markers")
                 continue
-            
+
             crop_detections_log.append(f"Person {person_index}: found {len(crop_ids)} markers: {crop_ids.flatten().tolist()}")
 
             for marker_id, marker_corners in zip(crop_ids.flatten(), crop_corners):
+                if int(marker_id) in ignored_marker_ids:
+                    crop_detections_log.append(f"  Marker {marker_id}: ignored by config")
+                    continue
                 pts_zoom = marker_corners[0].astype(np.float32)
                 area = float(cv2.contourArea(pts_zoom)) / (zoom_scale * zoom_scale)
-                if area < min_marker_area:
-                    crop_detections_log.append(f"  Marker {marker_id}: area={area:.1f} < threshold={min_marker_area} (FILTERED)")
+                area_threshold = marker_area_threshold(
+                    marker_id,
+                    assigned_marker_ids,
+                    assigned_min_marker_area,
+                    unassigned_min_marker_area,
+                )
+                if area < area_threshold:
+                    crop_detections_log.append(f"  Marker {marker_id}: area={area:.1f} < threshold={area_threshold} (FILTERED)")
                     continue
                 pts_full = (pts_zoom / zoom_scale) + np.array([cx1, cy1], dtype=np.float32)
                 if not marker_quality_ok(pts_full, person["bbox"], min_side_px=8.0):
@@ -471,15 +580,23 @@ def detect_aruco_in_person_crops(aruco_dict, frame, person_boxes, zoom_scale, ma
             full_corners, full_ids = detect_markers_with_variants(detector, gray)
             if full_ids is not None:
                 for marker_id, marker_corners in zip(full_ids.flatten(), full_corners):
+                    if int(marker_id) in ignored_marker_ids:
+                        continue
                     pts_full = marker_corners[0].astype(np.float32)
                     area = marker_area(pts_full)
-                    if area < min_marker_area:
+                    area_threshold = marker_area_threshold(
+                        marker_id,
+                        assigned_marker_ids,
+                        assigned_min_marker_area,
+                        unassigned_min_marker_area,
+                    )
+                    if area < area_threshold:
                         continue
                     marker_center = pts_full.mean(axis=0)
-                    matched_person = find_person_for_marker(marker_center, person_boxes, 0.0)
+                    matched_person = find_person_for_marker(marker_center, person_boxes, 0.18)
                     if matched_person is None:
                         continue
-                    if not expanded_contains(matched_person["bbox"], marker_center, 0.0):
+                    if not expanded_contains(matched_person["bbox"], marker_center, 0.18):
                         continue
                     if not marker_quality_ok(pts_full, matched_person["bbox"], min_side_px=8.0):
                         continue
@@ -506,17 +623,44 @@ def detect_aruco_in_person_crops(aruco_dict, frame, person_boxes, zoom_scale, ma
     if not candidates:
         return None, None, {}
 
-    best_by_marker = {}
+    # Wide/zoomed person crops can see a neighboring marker. A single person
+    # detection must not own multiple employee IDs, otherwise yellow can bind to
+    # the wrong worker. Keep the strongest marker per person first, then ensure
+    # each marker is used only once.
+    best_by_person = {}
     for item in candidates:
+        person_key = id(item["person"])
+        previous = best_by_person.get(person_key)
+        if previous is None or item["score"] > previous["score"]:
+            best_by_person[person_key] = item
+
+    best_by_marker = {}
+    used_people = set()
+    for item in sorted(best_by_person.values(), key=lambda value: value["score"], reverse=True):
         marker_id = item["marker_id"]
+        person_key = id(item["person"])
+        if person_key in used_people:
+            continue
         previous = best_by_marker.get(marker_id)
         if previous is None or item["score"] > previous["score"]:
             best_by_marker[marker_id] = item
+            used_people.add(person_key)
 
     ordered = sorted(best_by_marker.values(), key=lambda item: item["score"], reverse=True)
     corners = tuple(np.array([item["corners"]], dtype=np.float32) for item in ordered)
     ids = np.array([[item["marker_id"]] for item in ordered], dtype=np.int32)
     marker_person_matches = {idx: item["person"] for idx, item in enumerate(ordered)}
+
+    # Update pos_hints with confirmed marker positions for next frame
+    if pos_hints is not None:
+        for item in ordered:
+            tid = item["person"].get("track_id") or item["person"].get("global_id")
+            if tid:
+                mc_y = float(item["corners"].mean(axis=0)[1])
+                by1, by2 = item["person"]["bbox"][1], item["person"]["bbox"][3]
+                rel_y = (mc_y - by1) / max(1.0, by2 - by1)
+                pos_hints[tid] = float(np.clip(rel_y, 0.05, 0.95))
+
     return corners, ids, marker_person_matches
 
 def merge_aruco_detections(primary_corners, primary_ids, primary_matches, fallback_corners, fallback_ids):
@@ -744,9 +888,9 @@ def marker_quality_ok(corners, person_bbox=None, min_side_px=8.0):
         person_h = max(1.0, y2 - y1)
         rel_x = (marker_center[0] - x1) / person_w
         rel_y = (marker_center[1] - y1) / person_h
-        if rel_x < -0.02 or rel_x > 1.02:
+        if rel_x < -0.08 or rel_x > 1.08:
             return False
-        if rel_y < 0.03 or rel_y > 0.78:
+        if rel_y < -0.02 or rel_y > 0.93:
             return False
     return True
 
@@ -1064,7 +1208,81 @@ class ByteTrackStyleTracker:
             if idx in used_box_ids:
                 continue
             if det.get("employee_marker_id") == int(marker_id):
-                used_box_ids.add(idx)
+                return det
+        return None
+
+
+class BoTSORTProductionTracker:
+    """Camera-local Ultralytics BoT-SORT backend.
+
+    Ultralytics tracker state is stored on the model/predictor, so production
+    uses one model instance per camera. That prevents track IDs from mixing
+    between RTSP streams while keeping the rest of the production ArUco/report
+    pipeline unchanged.
+    """
+
+    def __init__(self, model_path, device, tracker_yaml="botsort.yaml", binding_ttl_seconds=12.0):
+        self.model_path = model_path
+        self.device = device
+        self.tracker_yaml = tracker_yaml
+        self.binding_ttl_seconds = float(binding_ttl_seconds)
+        self.models_by_camera = {}
+        self.employee_bindings = {}
+
+    def _model_for_camera(self, cam_id):
+        model = self.models_by_camera.get(cam_id)
+        if model is None:
+            model = YOLO(self.model_path)
+            if hasattr(model, "to"):
+                model.to(self.device)
+            self.models_by_camera[cam_id] = model
+        return model
+
+    def update(self, cam_id, proc_frame, yolo_scale, render_frame, confidence, classes, imgsz):
+        model = self._model_for_camera(cam_id)
+        result = model.track(
+            proc_frame,
+            persist=True,
+            tracker=self.tracker_yaml,
+            conf=confidence,
+            iou=0.70,
+            classes=classes,
+            verbose=False,
+            device=self.device,
+            imgsz=imgsz,
+            half=(self.device != "cpu"),
+        )[0]
+        detections = scale_tracked_boxes(result, yolo_scale, render_frame)
+        bindings = self.employee_bindings.setdefault(cam_id, {})
+        now_ts = time.time()
+        for track_id in list(bindings):
+            entry = bindings[track_id]
+            entry_ts = entry.get("ts", 0.0) if isinstance(entry, dict) else 0.0
+            if now_ts - entry_ts > self.binding_ttl_seconds:
+                bindings.pop(track_id, None)
+        for det in detections:
+            entry = bindings.get(det.get("track_id"))
+            marker_id = entry.get("marker_id") if isinstance(entry, dict) else entry
+            if marker_id is not None:
+                det["employee_marker_id"] = int(marker_id)
+                det["global_id"] = f"emp_{int(marker_id)}"
+                if isinstance(entry, dict):
+                    entry["ts"] = now_ts
+        return detections
+
+    def bind_employee(self, cam_id, track_id, marker_id):
+        if track_id is None:
+            return
+        self.employee_bindings.setdefault(cam_id, {})[track_id] = {
+            "marker_id": int(marker_id),
+            "ts": time.time(),
+        }
+
+    def find_employee_detection(self, cam_id, marker_id, detections, used_box_ids):
+        for idx, det in enumerate(detections):
+            if idx in used_box_ids:
+                continue
+            if det.get("employee_marker_id") == int(marker_id):
                 return det
         return None
 
@@ -1095,16 +1313,19 @@ def find_person_for_marker(marker_center, person_boxes, margin_ratio, existing_s
         feature_score = 0.0
         if previous_feature is not None and person.get("feature") is not None:
             feature_score = feature_similarity(previous_feature, person.get("feature"))
-        same_track_bonus = -160.0 if expected_track_id is not None and person.get("track_id") == expected_track_id else 0.0
-        inside_bonus = -100.0 if expanded_contains(person["bbox"], marker_point, 0.0) else 0.0
+        same_track_bonus = -260.0 if expected_track_id is not None and person.get("track_id") == expected_track_id else 0.0
+        inside_bonus = -130.0 if expanded_contains(person["bbox"], marker_point, 0.0) else 0.0
+        # When YOLO/BoT-SORT returns duplicate nested boxes around one worker,
+        # keep the marker on the stable full-body box instead of a small crop.
+        full_body_bonus = -min(130.0, np.sqrt(max(1.0, bbox_area(person["bbox"]))) * 0.22)
         return (
-            center_dist * 0.45
-            - iou * 120.0
-            - feature_score * 200.0
-            + person.get("confidence", 0.0) * -10.0
+            center_dist * 0.30
+            - iou * 170.0
+            - feature_score * 240.0
+            + person.get("confidence", 0.0) * -90.0
             + inside_bonus
             + same_track_bonus
-            + bbox_area(person["bbox"]) * 0.0005
+            + full_body_bonus
         )
 
     return min(containing, key=person_score)
@@ -1214,9 +1435,9 @@ def classify_worker_activity(worker_state, person, frame, d_pixels, now_ts, runt
         status = "WORKING"
         reason = "upper_body_or_hand_motion"
         worker_state["last_work_motion_ts"] = now_ts
-    elif moving and motion_ema >= gesture_threshold:
+    elif motion_ema >= gesture_threshold:
         status = "WORKING"
-        reason = "walking_with_gesture_or_material"
+        reason = "small_hand_or_body_motion"
         worker_state["last_work_motion_ts"] = now_ts
     elif moving:
         status = "WALKING"
@@ -1263,10 +1484,10 @@ def find_continuation_person(worker_state, person_boxes, used_box_ids, max_radiu
         feature_score = feature_similarity(last_feature, person.get("feature"))
         same_track = last_track_id is not None and person.get("track_id") == last_track_id
         spatial_good = distance_px <= max_radius_px or center_distance <= max_radius_px
-        strong_visual = feature_score >= 0.58
-        weak_visual = feature_score >= 0.48
+        strong_visual = feature_score >= 0.72
+        weak_visual = feature_score >= 0.65
 
-        if not same_track and not (spatial_good and weak_visual) and not strong_visual:
+        if not same_track and not (spatial_good and strong_visual):
             continue
 
         aspect_penalty = 0.0
@@ -1277,11 +1498,11 @@ def find_continuation_person(worker_state, person_boxes, used_box_ids, max_radiu
             prev_area = max(1.0, bbox_area(last_bbox))
             next_area = max(1.0, bbox_area(person["bbox"]))
             area_penalty = abs(np.log(next_area / prev_area))
-            if not same_track and area_penalty > 1.45 and not strong_visual:
+            if not same_track and area_penalty > 0.85:
                 continue
-            if not same_track and aspect_penalty > 1.20 and not strong_visual:
+            if not same_track and aspect_penalty > 0.85:
                 continue
-            if not same_track and iou < min_iou and not weak_visual:
+            if not same_track and iou < max(min_iou, 0.08) and center_distance > max(70.0, max_radius_px * 0.35):
                 continue
 
         score = (
@@ -1297,7 +1518,15 @@ def find_continuation_person(worker_state, person_boxes, used_box_ids, max_radiu
         candidates.append((score, idx, person))
     if not candidates:
         return None
-    _, idx, person = min(candidates, key=lambda item: item[0])
+    candidates.sort(key=lambda item: item[0])
+    if len(candidates) > 1:
+        best_person = candidates[0][2]
+        second_person = candidates[1][2]
+        best_same_track = last_track_id is not None and best_person.get("track_id") == last_track_id
+        second_distance = float(np.linalg.norm(bbox_center(second_person["bbox"]) - last_center)) if last_center is not None else 9999.0
+        if not best_same_track and second_distance <= max(120.0, max_radius_px * 0.55):
+            return None
+    _, idx, person = candidates[0]
     used_box_ids.add(idx)
     return person
 
@@ -1380,32 +1609,7 @@ def find_safe_hidden_continuation(worker_state, person_boxes, used_box_ids, max_
         min_iou,
     )
     if candidate is None:
-        last_bbox = worker_state.get("last_bbox")
-        if not last_bbox:
-            return None
-        last_center = bbox_center(last_bbox)
-        last_floor = np.array((last_center[0], last_bbox[3]), dtype=np.float32)
-        last_area = max(1.0, bbox_area(last_bbox))
-        last_aspect = bbox_aspect(last_bbox)
-        nearby = []
-        for idx, person in enumerate(person_boxes):
-            if idx in used_box_ids:
-                continue
-            person_marker = person.get("employee_marker_id")
-            if person_marker is not None and int(person_marker) != int(worker_state.get("opencv_marker_id", person_marker)):
-                continue
-            center_distance = float(np.linalg.norm(bbox_center(person["bbox"]) - last_center))
-            floor_distance = float(np.linalg.norm(person_floor_point(person) - last_floor))
-            area_ratio = abs(np.log(max(1.0, bbox_area(person["bbox"])) / last_area))
-            aspect_ratio = abs(np.log(bbox_aspect(person["bbox"]) / last_aspect)) if last_aspect else 0.0
-            if center_distance <= max(125.0, max_radius_px * 0.70) or floor_distance <= max(150.0, max_radius_px * 0.80):
-                if area_ratio <= 1.35 and aspect_ratio <= 1.35:
-                    nearby.append((center_distance + floor_distance * 0.5 + area_ratio * 30.0, idx, person))
-        if len(nearby) != 1:
-            return None
-        _, idx, candidate = nearby[0]
-        used_box_ids.add(idx)
-        return candidate
+        return None
 
     last_bbox = worker_state.get("last_bbox")
     last_feature = worker_state.get("last_feature")
@@ -1421,7 +1625,7 @@ def find_safe_hidden_continuation(worker_state, person_boxes, used_box_ids, max_
     feature_score = feature_similarity(last_feature, candidate.get("feature"))
     center_distance = float(np.linalg.norm(bbox_center(candidate["bbox"]) - bbox_center(last_bbox)))
     size_ref = max(1.0, np.sqrt(max(1.0, bbox_area(last_bbox))))
-    if feature_score < 0.62:
+    if feature_score < 0.72:
         return None
     if iou < 0.18 and center_distance > max(95.0, size_ref * 0.65):
         return None
@@ -1435,117 +1639,123 @@ def find_safe_hidden_continuation(worker_state, person_boxes, used_box_ids, max_
         other_distance = float(np.linalg.norm(bbox_center(person["bbox"]) - bbox_center(last_bbox)))
         if other_distance <= max(120.0, size_ref * 0.85):
             close_unknowns += 1
-    if close_unknowns >= 2:
+    if close_unknowns >= 1:
         return None
     return candidate
 
-def create_cv_visual_tracker():
-    if hasattr(cv2, "TrackerCSRT_create"):
-        return cv2.TrackerCSRT_create()
-    if hasattr(cv2, "legacy") and hasattr(cv2.legacy, "TrackerCSRT_create"):
-        return cv2.legacy.TrackerCSRT_create()
-    if hasattr(cv2, "TrackerKCF_create"):
-        return cv2.TrackerKCF_create()
-    if hasattr(cv2, "legacy") and hasattr(cv2.legacy, "TrackerKCF_create"):
-        return cv2.legacy.TrackerKCF_create()
-    return None
 
-def init_visual_lock(visual_trackers, cam_id, marker_id, frame, bbox, now_ts):
-    tracker = create_cv_visual_tracker()
-    if tracker is None or frame is None:
-        return
-    h, w = frame.shape[:2]
-    x1, y1, x2, y2 = [float(v) for v in bbox]
-    x1 = max(0.0, min(w - 2.0, x1))
-    y1 = max(0.0, min(h - 2.0, y1))
-    x2 = max(x1 + 2.0, min(float(w), x2))
-    y2 = max(y1 + 2.0, min(float(h), y2))
-    rect = (
-        int(round(x1)),
-        int(round(y1)),
-        int(round(x2 - x1)),
-        int(round(y2 - y1)),
+def bound_track_detection_is_plausible(worker_state, person, marker_age, runtime):
+    if person is None:
+        return False, "no bound person"
+    confidence = float(person.get("confidence", 0.0))
+    same_track = (
+        worker_state.get("track_id") is not None
+        and person.get("track_id") == worker_state.get("track_id")
     )
-    ok = tracker.init(frame, rect)
-    if ok is False:
-        return
-    visual_trackers[(cam_id, int(marker_id))] = {
-        "tracker": tracker,
-        "bbox": (x1, y1, x2, y2),
-        "last_update_ts": now_ts,
-    }
-
-def visual_lock_person(visual_trackers, cam_id, marker_id, worker_state, frame, person_boxes, now_ts, max_age_seconds):
-    lock = visual_trackers.get((cam_id, int(marker_id)))
-    if not lock or frame is None:
-        return None
-    if now_ts - worker_state.get("last_marker_seen_ts", 0.0) > max_age_seconds:
-        visual_trackers.pop((cam_id, int(marker_id)), None)
-        return None
-
-    tracker = lock.get("tracker")
-    if tracker is None:
-        return None
-    ok, box = tracker.update(frame)
-    if not ok:
-        visual_trackers.pop((cam_id, int(marker_id)), None)
-        return None
-
-    h, w = frame.shape[:2]
-    x, y, bw, bh = [float(v) for v in box]
-    if bw < 18 or bh < 28:
-        visual_trackers.pop((cam_id, int(marker_id)), None)
-        return None
-    x1 = max(0.0, min(w - 1.0, x))
-    y1 = max(0.0, min(h - 1.0, y))
-    x2 = max(x1 + 1.0, min(float(w), x + bw))
-    y2 = max(y1 + 1.0, min(float(h), y + bh))
-    bbox = (x1, y1, x2, y2)
-
-    matching_person = None
-    best_iou = 0.0
-    for person in person_boxes or []:
-        iou = bbox_iou(bbox, person["bbox"])
-        if iou > best_iou:
-            best_iou = iou
-            matching_person = person
-    if matching_person is None:
-        visual_trackers.pop((cam_id, int(marker_id)), None)
-        return None
-
-    visual_center = bbox_center(bbox)
-    if best_iou < 0.18:
-        containing_people = [
-            person for person in (person_boxes or [])
-            if expanded_contains(person["bbox"], visual_center, 0.0)
-        ]
-        if len(containing_people) == 1:
-            matching_person = containing_people[0]
-        else:
-            visual_trackers.pop((cam_id, int(marker_id)), None)
-            return None
+    if marker_age <= 4.0 and confidence >= runtime["tracker_confidence_threshold"]:
+        return True, "fresh marker lock"
+    min_confidence = (
+        runtime["tracker_confidence_threshold"]
+        if same_track and marker_age <= runtime["marker_hidden_max_seconds"]
+        else runtime["identity_continuation_min_confidence"]
+    )
+    if confidence < min_confidence:
+        return False, "bound track confidence below identity threshold"
 
     last_bbox = worker_state.get("last_bbox")
-    if last_bbox is not None:
-        prev_area = max(1.0, bbox_area(last_bbox))
-        next_area = max(1.0, bbox_area(bbox))
-        area_ratio = abs(np.log(next_area / prev_area))
-        if area_ratio > 1.80:
-            visual_trackers.pop((cam_id, int(marker_id)), None)
-            return None
+    if last_bbox is None:
+        return marker_age <= 3.0, "no previous bbox for bound track"
 
-    bbox = matching_person["bbox"]
-    lock["bbox"] = bbox
-    lock["last_update_ts"] = now_ts
-    return {
-        "bbox": bbox,
-        "confidence": min(0.95, max(0.55, float(matching_person.get("confidence", worker_state.get("person_conf", 0.6))))),
-        "track_id": matching_person.get("track_id", worker_state.get("track_id")),
-        "feature": matching_person.get("feature", worker_state.get("last_feature")),
-        "global_id": f"emp_{int(marker_id)}",
-        "employee_marker_id": int(marker_id),
-        "visual_lock": True,
-    }
+    current_bbox = person["bbox"]
+    iou = bbox_iou(last_bbox, current_bbox)
+    last_center = bbox_center(last_bbox)
+    current_center = bbox_center(current_bbox)
+    center_distance = float(np.linalg.norm(current_center - last_center))
+    floor_distance = float(np.linalg.norm(person_floor_point(person) - np.array((last_center[0], last_bbox[3]), dtype=np.float32)))
+    last_area = max(1.0, bbox_area(last_bbox))
+    current_area = max(1.0, bbox_area(current_bbox))
+    area_ratio = abs(np.log(current_area / last_area))
+    last_aspect = bbox_aspect(last_bbox)
+    aspect_ratio = abs(np.log(bbox_aspect(current_bbox) / last_aspect)) if last_aspect else 0.0
+    feature_score = feature_similarity(worker_state.get("last_feature"), person.get("feature"))
+    size_ref = max(1.0, np.sqrt(last_area))
+
+    if iou >= 0.18:
+        return True, "bound track overlaps previous body"
+    if center_distance <= max(115.0, size_ref * 0.70) and floor_distance <= max(150.0, size_ref * 0.90):
+        return True, "bound track near previous body"
+    if same_track and marker_age <= runtime["marker_hidden_max_seconds"]:
+        if center_distance <= max(170.0, size_ref * 1.05) and floor_distance <= max(210.0, size_ref * 1.20):
+            return True, "same bound track near previous body"
+    if area_ratio > 1.05 or aspect_ratio > 1.05:
+        return False, "bound track body shape changed too much"
+    if feature_score >= 0.72 and center_distance <= max(170.0, size_ref * 1.10):
+        return True, "bound track appearance match"
+    return False, "bound track jumped away from previous body"
+
+
+def find_single_person_stationary_continuation(worker_state, person_boxes, used_box_ids, runtime):
+    available = [
+        (idx, person)
+        for idx, person in enumerate(person_boxes)
+        if idx not in used_box_ids and float(person.get("confidence", 0.0)) >= runtime["identity_continuation_min_confidence"]
+    ]
+    if len(available) != 1:
+        return None
+
+    idx, person = available[0]
+    last_bbox = worker_state.get("last_bbox")
+    if last_bbox is None:
+        return None
+
+    current_bbox = person["bbox"]
+    iou = bbox_iou(last_bbox, current_bbox)
+    last_center = bbox_center(last_bbox)
+    current_center = bbox_center(current_bbox)
+    center_distance = float(np.linalg.norm(current_center - last_center))
+    last_floor = np.array((last_center[0], last_bbox[3]), dtype=np.float32)
+    floor_distance = float(np.linalg.norm(person_floor_point(person) - last_floor))
+    last_area = max(1.0, bbox_area(last_bbox))
+    current_area = max(1.0, bbox_area(current_bbox))
+    area_ratio = abs(np.log(current_area / last_area))
+    last_aspect = bbox_aspect(last_bbox)
+    aspect_ratio = abs(np.log(bbox_aspect(current_bbox) / last_aspect)) if last_aspect else 0.0
+    feature_score = feature_similarity(worker_state.get("last_feature"), person.get("feature"))
+    size_ref = max(1.0, np.sqrt(last_area))
+
+    if area_ratio > 1.20 or aspect_ratio > 1.20:
+        return None
+    if iou >= 0.10:
+        used_box_ids.add(idx)
+        return person
+    if center_distance <= max(180.0, size_ref * 1.05) and floor_distance <= max(230.0, size_ref * 1.25):
+        used_box_ids.add(idx)
+        return person
+    if feature_score >= 0.68 and center_distance <= max(230.0, size_ref * 1.35):
+        used_box_ids.add(idx)
+        return person
+    return None
+
+
+def scale_tracked_boxes(result, scale, frame):
+    boxes = []
+    if result is None or result.boxes is None or result.boxes.xyxy is None:
+        return boxes
+    xyxy = result.boxes.xyxy.cpu().numpy()
+    confs = result.boxes.conf.cpu().numpy() if result.boxes.conf is not None else np.ones((len(xyxy),), dtype=np.float32)
+    ids = result.boxes.id.cpu().numpy().astype(int) if result.boxes.id is not None else np.arange(len(xyxy), dtype=int)
+    for box, conf, track_id in zip(xyxy, confs, ids):
+        x1, y1, x2, y2 = [float(v * scale) for v in box]
+        bbox = (x1, y1, x2, y2)
+        boxes.append({
+            "bbox": bbox,
+            "confidence": float(conf),
+            "track_id": f"bs_{int(track_id)}",
+            "global_id": f"bs_{int(track_id)}",
+            "employee_marker_id": None,
+            "feature": person_appearance_feature(frame, bbox),
+        })
+    return boxes
 
 def accept_path_step(worker_state, dist_feet, d_pixels, tracking_mode):
     if len(worker_state.get("path", [])) <= 1:
@@ -1682,6 +1892,10 @@ def unassigned_marker_snapshot_path(marker_id, cam_id, now_ts):
     folder.mkdir(parents=True, exist_ok=True)
     return str(folder / f"marker_{int(marker_id):02d}_{safe_filename(cam_id)}_{stamp}.jpg")
 
+def write_text_file(path, content):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+
 def write_jpeg_atomic(path, frame, quality):
     temp_path = path.replace(".jpg", "_tmp.jpg")
     cv2.imwrite(temp_path, frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
@@ -1689,6 +1903,33 @@ def write_jpeg_atomic(path, frame, quality):
         os.replace(temp_path, path)
     except OSError:
         pass
+
+def append_tracking_debug(path, rows):
+    if not rows:
+        return
+    debug_path = Path(path)
+    debug_path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not debug_path.exists()
+    fieldnames = [
+        "ts",
+        "camera",
+        "marker_id",
+        "employee",
+        "event",
+        "reason",
+        "marker_age_sec",
+        "persons",
+        "last_track_id",
+        "matched_track_id",
+        "person_conf",
+        "tracking_mode",
+    ]
+    with debug_path.open("a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if write_header:
+            writer.writeheader()
+        for row in rows:
+            writer.writerow({name: row.get(name, "") for name in fieldnames})
 
 def clear_startup_outputs(runtime):
     Path("logs").mkdir(exist_ok=True)
@@ -1999,7 +2240,8 @@ def main():
         }
     print(f"[STARTUP] Loaded employee_map with IDs: {sorted(employee_map.keys())}")
 
-    inference_workers = load_models_for_devices(config["detection"]["model_path"], devices)
+    tracker_backend = runtime["tracker_backend"]
+    inference_workers = [] if tracker_backend == "botsort" else load_models_for_devices(config["detection"]["model_path"], devices)
     inference_executor = (
         concurrent.futures.ThreadPoolExecutor(max_workers=len(inference_workers))
         if len(inference_workers) > 1
@@ -2011,7 +2253,7 @@ def main():
         f"Runtime: device={device_desc}, profile={runtime['performance_profile']}, batch={runtime['batch_size']}, "
         f"inference_width={runtime['inference_width']}, aruco_every={runtime['aruco_every_n_frames']}, "
         f"dashboard={runtime['dashboard_image_width']}px/{runtime['dashboard_fps']}fps, "
-        f"tracker={'ByteTrack' if sv is not None and hasattr(sv, 'ByteTrack') else 'local'}+ReID"
+        f"tracker={tracker_backend}"
     )
     if runtime["redirect_decoder_logs"]:
         print(f"Decoder warnings redirected to {runtime['decoder_log_file']}")
@@ -2029,7 +2271,7 @@ def main():
     last_dashboard_save_ts = {}
     pending_live_writes = {}
     last_unassigned_snapshot_ts = {}
-    visual_trackers = {}
+    aruco_pos_hints = {}   # track_id -> rel_y of last confirmed marker position within person bbox
     loop_counter = 0
     os.makedirs("logs", exist_ok=True)
     os.makedirs(runtime["log_dir"], exist_ok=True)
@@ -2054,9 +2296,21 @@ def main():
     print(f"Distance methods: {distance_methods}")
     monitor = PerformanceMonitor(runtime["monitor_interval_seconds"])
     loop_interval = 1.0 / max(float(runtime["target_fps"]), 1.0)
-    confidence = config["detection"].get("confidence_threshold", 0.25)
+    confidence = min(
+        float(runtime["tracker_confidence_threshold"]),
+        float(config["detection"].get("confidence_threshold", 0.25)),
+    )
+    display_confidence = float(runtime["display_confidence_threshold"])
     classes = config["detection"].get("classes", [0])
-    person_tracker = ByteTrackStyleTracker(runtime)
+    if tracker_backend == "botsort":
+        person_tracker = BoTSORTProductionTracker(
+            config["detection"]["model_path"],
+            devices[0] if devices else "cpu",
+            runtime["botsort_tracker_yaml"],
+            runtime["track_binding_ttl_seconds"],
+        )
+    else:
+        person_tracker = ByteTrackStyleTracker(runtime)
 
     aruco_pool = concurrent.futures.ThreadPoolExecutor(max_workers=runtime["aruco_workers"])
     image_writer_pool = concurrent.futures.ThreadPoolExecutor(max_workers=runtime["image_writer_workers"])
@@ -2065,6 +2319,8 @@ def main():
         runtime["path_video_codec"],
         runtime["path_video_min_frames"],
     )
+    tracking_debug_path = os.path.join(runtime["log_dir"], "tracking_debug.csv")
+    tracking_debug_rows = []
     last_camera_sync_ts = 0.0
     last_stats_write_ts = 0.0
     stats_write_interval = 0.5  # Write live_stats.json only every 0.5 seconds (2x/sec instead of 8x/sec)
@@ -2104,6 +2360,7 @@ def main():
                         "batch_size": runtime["batch_size"],
                         "device": device_desc,
                         "performance_profile": runtime["performance_profile"],
+                        "tracker_backend": runtime["tracker_backend"],
                         "target_fps": runtime["target_fps"],
                         "path_video_every_n_frames": runtime["path_video_every_n_frames"],
                         "path_video_fps": runtime["path_video_fps"],
@@ -2116,6 +2373,12 @@ def main():
                         "marker_hidden_grace_seconds": runtime["marker_hidden_grace_seconds"],
                         "marker_hidden_match_radius_px": runtime["marker_hidden_match_radius_px"],
                         "tracker_max_age_seconds": runtime["tracker_max_age_seconds"],
+                        "tracker_confidence_threshold": runtime["tracker_confidence_threshold"],
+                        "display_confidence_threshold": runtime["display_confidence_threshold"],
+                        "track_binding_ttl_seconds": runtime["track_binding_ttl_seconds"],
+                        "identity_continuation_max_seconds": runtime["identity_continuation_max_seconds"],
+                        "identity_continuation_min_confidence": runtime["identity_continuation_min_confidence"],
+                        "single_person_continuation_max_seconds": runtime["single_person_continuation_max_seconds"],
                         "reid_match_threshold": runtime["reid_match_threshold"],
                         "activity_idle_after_seconds": runtime["activity_idle_after_seconds"],
                     },
@@ -2168,17 +2431,20 @@ def main():
 
                 total_detected_people = 0
                 inference_tasks = []
-                for batch_index, frame_batch in enumerate(chunked(prepared_frames, int(runtime["batch_size"]))):
-                    if not frame_batch:
-                        continue
-                    worker = inference_workers[batch_index % len(inference_workers)]
-                    frames = [item["frame"] for item in frame_batch]
-                    if inference_executor is not None:
-                        task = inference_executor.submit(run_yolo_inference, worker, frames, confidence, classes)
-                        inference_tasks.append((frame_batch, task, None))
-                    else:
-                        results_batch = run_yolo_inference(worker, frames, confidence, classes)
-                        inference_tasks.append((frame_batch, None, results_batch))
+                if tracker_backend == "botsort":
+                    inference_tasks.append((prepared_frames, None, [None] * len(prepared_frames)))
+                else:
+                    for batch_index, frame_batch in enumerate(chunked(prepared_frames, int(runtime["batch_size"]))):
+                        if not frame_batch:
+                            continue
+                        worker = inference_workers[batch_index % len(inference_workers)]
+                        frames = [item["frame"] for item in frame_batch]
+                        if inference_executor is not None:
+                            task = inference_executor.submit(run_yolo_inference, worker, frames, confidence, classes)
+                            inference_tasks.append((frame_batch, task, None))
+                        else:
+                            results_batch = run_yolo_inference(worker, frames, confidence, classes)
+                            inference_tasks.append((frame_batch, None, results_batch))
 
                 for frame_batch, task, direct_results in inference_tasks:
                     results_batch = direct_results if task is None else task.result()
@@ -2186,12 +2452,23 @@ def main():
                         cam_id = item["id"]
                         render_frame = item["render_frame"]
                         time_scale = camera_time_scale(item.get("stream_status"), runtime)
-                        person_boxes = scale_person_boxes(results, item["yolo_scale"])
-                        person_boxes = person_tracker.update(cam_id, person_boxes, render_frame, now_ts)
+                        if tracker_backend == "botsort":
+                            person_boxes = person_tracker.update(
+                                cam_id,
+                                item["frame"],
+                                item["yolo_scale"],
+                                render_frame,
+                                confidence,
+                                classes,
+                                runtime["inference_width"],
+                            )
+                        else:
+                            person_boxes = scale_person_boxes(results, item["yolo_scale"])
+                            person_boxes = person_tracker.update(cam_id, person_boxes, render_frame, now_ts)
                         used_person_box_ids = set()
                         marker_seen_workers = set()
 
-                        person_count = len(results.boxes)
+                        person_count = len(person_boxes)
                         total_detected_people += person_count
                         marker_person_matches = {}
                         if runtime["aruco_crop_first_enabled"]:
@@ -2203,6 +2480,11 @@ def main():
                                 runtime["aruco_crop_margin_ratio"],
                                 runtime["min_marker_area"],
                                 runtime.get("debug_mode", False),
+                                set(employee_map.keys()),
+                                runtime["assigned_min_marker_area"],
+                                runtime["unassigned_min_marker_area"],
+                                runtime["ignored_opencv_marker_ids"],
+                                aruco_pos_hints,
                             )
                         else:
                             corners, ids = None, None
@@ -2224,6 +2506,26 @@ def main():
                             full_corners,
                             full_ids,
                         )
+                        if ids is not None and corners is not None:
+                            for marker_index, marker_id_value in enumerate(ids.flatten()):
+                                if marker_person_matches.get(marker_index) is not None:
+                                    continue
+                                marker_id_value = int(marker_id_value)
+                                pts_full = corners[marker_index][0].astype(np.float32)
+                                marker_center = pts_full.mean(axis=0)
+                                matched_person = find_person_for_marker(
+                                    marker_center,
+                                    person_boxes,
+                                    0.22,
+                                    history.get(marker_id_value),
+                                )
+                                if matched_person is None:
+                                    continue
+                                if not expanded_contains(matched_person["bbox"], marker_center, 0.22):
+                                    continue
+                                if not marker_quality_ok(pts_full, matched_person["bbox"], min_side_px=8.0):
+                                    continue
+                                marker_person_matches[marker_index] = matched_person
 
                         num_markers = int(ids.size) if ids is not None else 0
                         num_crop_matches = sum(1 for match in marker_person_matches.values() if match is not None)
@@ -2235,31 +2537,112 @@ def main():
                             )
 
                         if ids is not None:
-                            detected_ids = ids.flatten().tolist()
+                            detected_ids = [
+                                int(mid)
+                                for mid in ids.flatten().tolist()
+                                if int(mid) not in runtime["ignored_opencv_marker_ids"]
+                            ]
                             unmapped_ids = [mid for mid in detected_ids if employee_map.get(mid) is None]
                             if unmapped_ids:
                                 print(f"[MARKER UNKNOWN] cam={cam_id} frame={frame_index}: OpenCV IDs {unmapped_ids} not in employees.csv")
                             for i, marker_id in enumerate(ids.flatten()):
                                 marker_id = int(marker_id)
+                                if marker_id in runtime["ignored_opencv_marker_ids"]:
+                                    continue
                                 emp = employee_map.get(marker_id)
                                 if not emp:
                                     continue
 
                                 marker_corners = corners[i][0]
-                                if marker_area(marker_corners) < runtime["min_marker_area"]:
+                                marker_area_minimum = (
+                                    runtime["assigned_min_marker_area"]
+                                    if emp.get("assigned", False)
+                                    else runtime["unassigned_min_marker_area"]
+                                )
+                                if marker_area(marker_corners) < marker_area_minimum:
                                     continue
 
                                 matched_person = marker_person_matches.get(i)
                                 existing_state = history.get(marker_id)
                                 if matched_person is None:
-                                    marker_confirmations.pop((cam_id, marker_id), None)
+                                    marker_seen_workers.add(marker_id)
+                                    for key in list(marker_confirmations):
+                                        if key[0] == cam_id and key[1] == marker_id:
+                                            marker_confirmations.pop(key, None)
+                                    tracking_debug_rows.append({
+                                        "ts": frame_data["timestamp"],
+                                        "camera": cam_id,
+                                        "marker_id": marker_id,
+                                        "employee": emp.get("name", ""),
+                                        "event": "marker_seen_no_person_match",
+                                        "reason": "marker detected but not inside any YOLO person box",
+                                        "marker_age_sec": 0,
+                                        "persons": len(person_boxes),
+                                        "last_track_id": existing_state.get("track_id") if existing_state else "",
+                                        "matched_track_id": "",
+                                        "person_conf": "",
+                                        "tracking_mode": "aruco_reject",
+                                    })
                                     if runtime.get("debug_mode"):
                                         print(
                                             f"[MARKER IGNORE] cam={cam_id} frame={frame_index}: "
                                             f"marker={marker_id} is not inside a detected person"
-                                        )
+                                    )
                                     continue
                                 matched_track_id = matched_person.get("track_id")
+                                owner_marker_id = matched_person.get("employee_marker_id")
+                                if owner_marker_id is not None and int(owner_marker_id) != marker_id:
+                                    owner_marker_id = int(owner_marker_id)
+                                    owner_state = history.get(owner_marker_id)
+                                    owner_recent_same_camera = (
+                                        owner_state is not None
+                                        and owner_state.get("cam_id") == cam_id
+                                        and (
+                                            now_ts - owner_state.get("last_marker_seen_ts", 0.0)
+                                        ) <= runtime["marker_stale_after_seconds"]
+                                    )
+                                    if owner_recent_same_camera:
+                                        tracking_debug_rows.append({
+                                            "ts": frame_data["timestamp"],
+                                            "camera": cam_id,
+                                            "marker_id": marker_id,
+                                            "employee": emp.get("name", ""),
+                                            "event": "marker_rejected_track_owned",
+                                            "reason": f"person track recently belongs to marker {owner_marker_id}",
+                                            "marker_age_sec": 0,
+                                            "persons": len(person_boxes),
+                                            "last_track_id": existing_state.get("track_id") if existing_state else "",
+                                            "matched_track_id": matched_track_id or "",
+                                            "person_conf": matched_person.get("confidence", ""),
+                                            "tracking_mode": "aruco_reject",
+                                        })
+                                        continue
+
+                                    # BoT-SORT can carry a stale employee binding after occlusion or ID reuse.
+                                    # A fresh marker inside the current YOLO body must be allowed to correct it.
+                                    if (
+                                        owner_state is not None
+                                        and owner_state.get("cam_id") == cam_id
+                                        and owner_state.get("track_id") == matched_track_id
+                                    ):
+                                        owner_state["track_id"] = None
+                                        owner_state["tracking_mode"] = "waiting_for_reappearance"
+                                    matched_person["employee_marker_id"] = None
+                                    matched_person["global_id"] = matched_person.get("global_id")
+                                    tracking_debug_rows.append({
+                                        "ts": frame_data["timestamp"],
+                                        "camera": cam_id,
+                                        "marker_id": marker_id,
+                                        "employee": emp.get("name", ""),
+                                        "event": "marker_allowed_stale_track_owner",
+                                        "reason": f"visible marker overrides stale track owner {owner_marker_id}",
+                                        "marker_age_sec": 0,
+                                        "persons": len(person_boxes),
+                                        "last_track_id": existing_state.get("track_id") if existing_state else "",
+                                        "matched_track_id": matched_track_id or "",
+                                        "person_conf": matched_person.get("confidence", ""),
+                                        "tracking_mode": "aruco_rebind",
+                                    })
                                 if existing_state and existing_state.get("cam_id") == cam_id:
                                     current_track_id = existing_state.get("track_id")
                                     if current_track_id and matched_track_id and current_track_id != matched_track_id:
@@ -2281,6 +2664,31 @@ def main():
                                             ))
                                             if switch_distance > runtime["marker_hidden_match_radius_px"]:
                                                 continue
+
+                                marker_side = float(max(
+                                    np.linalg.norm(marker_corners[1] - marker_corners[0]),
+                                    np.linalg.norm(marker_corners[2] - marker_corners[1]),
+                                    np.linalg.norm(marker_corners[3] - marker_corners[2]),
+                                    np.linalg.norm(marker_corners[0] - marker_corners[3]),
+                                ))
+                                required_confirmations = runtime["marker_confirmations_required"]
+                                if not emp.get("assigned", False):
+                                    required_confirmations = runtime["unassigned_marker_confirmations_required"]
+                                elif marker_id in history or marker_side >= 14.0:
+                                    required_confirmations = 1
+
+                                confirmation_key = (cam_id, marker_id, matched_track_id or id(matched_person))
+                                marker_confirmations[confirmation_key] = marker_confirmations.get(confirmation_key, 0) + 1
+                                if (
+                                    marker_id not in history
+                                    and marker_confirmations[confirmation_key] < required_confirmations
+                                ):
+                                    continue
+
+                                for key in list(marker_confirmations):
+                                    if key[0] == cam_id and key[1] == marker_id and key != confirmation_key:
+                                        marker_confirmations.pop(key, None)
+
                                 try:
                                     used_person_box_ids.add(person_boxes.index(matched_person))
                                 except ValueError:
@@ -2289,22 +2697,6 @@ def main():
                                     person_tracker.bind_employee(cam_id, matched_person["track_id"], marker_id)
                                     matched_person["employee_marker_id"] = marker_id
                                     matched_person["global_id"] = f"emp_{marker_id}"
-                                init_visual_lock(
-                                    visual_trackers,
-                                    cam_id,
-                                    marker_id,
-                                    render_frame,
-                                    matched_person["bbox"],
-                                    now_ts,
-                                )
-
-                                confirmation_key = (cam_id, marker_id)
-                                marker_confirmations[confirmation_key] = marker_confirmations.get(confirmation_key, 0) + 1
-                                if (
-                                    marker_id not in history
-                                    and marker_confirmations[confirmation_key] < runtime["marker_confirmations_required"]
-                                ):
-                                    continue
 
                                 x1f, y1f, x2f, y2f = matched_person["bbox"]
                                 floor_pos = np.array([(x1f + x2f) / 2.0, y2f], dtype=np.float32)
@@ -2462,14 +2854,46 @@ def main():
                                 used_person_box_ids,
                             )
                             tracking_mode = "byte_track_reid"
-                            if matched_person is None:
+                            if matched_person is not None:
+                                plausible, reason = bound_track_detection_is_plausible(
+                                    worker_state,
+                                    matched_person,
+                                    marker_age,
+                                    runtime,
+                                )
+                                if not plausible:
+                                    tracking_debug_rows.append({
+                                        "ts": frame_data["timestamp"],
+                                        "camera": cam_id,
+                                        "marker_id": marker_id,
+                                        "employee": worker_state.get("name", ""),
+                                        "event": "yellow_not_continued",
+                                        "reason": reason,
+                                        "marker_age_sec": round(marker_age, 2),
+                                        "persons": len(person_boxes),
+                                        "last_track_id": worker_state.get("track_id", ""),
+                                        "matched_track_id": matched_person.get("track_id", ""),
+                                        "person_conf": matched_person.get("confidence", ""),
+                                        "tracking_mode": tracking_mode,
+                                    })
+                                    matched_person = None
+                            if (
+                                matched_person is None
+                                and marker_age <= runtime["identity_continuation_max_seconds"]
+                            ):
                                 matched_person = find_strict_employee_rebind(
                                     worker_state,
                                     person_boxes,
                                     used_person_box_ids,
                                 )
                                 tracking_mode = "strict_rebind"
-                            if matched_person is None and marker_age <= runtime["marker_hidden_max_seconds"]:
+                            if (
+                                matched_person is None
+                                and marker_age <= min(
+                                    runtime["marker_hidden_max_seconds"],
+                                    runtime["identity_continuation_max_seconds"],
+                                )
+                            ):
                                 matched_person = find_safe_hidden_continuation(
                                     worker_state,
                                     person_boxes,
@@ -2478,25 +2902,61 @@ def main():
                                     runtime["marker_hidden_min_iou"],
                                 )
                                 tracking_mode = "safe_hidden"
-                            if matched_person is None:
-                                matched_person = visual_lock_person(
-                                    visual_trackers,
-                                    cam_id,
-                                    marker_id,
+                            if (
+                                matched_person is None
+                                and marker_age <= runtime["single_person_continuation_max_seconds"]
+                            ):
+                                matched_person = find_single_person_stationary_continuation(
                                     worker_state,
-                                    render_frame,
                                     person_boxes,
-                                    now_ts,
-                                    runtime["marker_hidden_max_seconds"],
+                                    used_person_box_ids,
+                                    runtime,
                                 )
-                                tracking_mode = "visual_lock"
-                                if matched_person is None:
-                                    continue
+                                tracking_mode = "single_person_hold"
+                            if (
+                                matched_person is not None
+                                and float(matched_person.get("confidence", 0.0)) < runtime["identity_continuation_min_confidence"]
+                            ):
+                                tracking_debug_rows.append({
+                                    "ts": frame_data["timestamp"],
+                                    "camera": cam_id,
+                                    "marker_id": marker_id,
+                                    "employee": worker_state.get("name", ""),
+                                    "event": "yellow_not_continued",
+                                    "reason": "continuation person confidence below identity threshold",
+                                    "marker_age_sec": round(marker_age, 2),
+                                    "persons": len(person_boxes),
+                                    "last_track_id": worker_state.get("track_id", ""),
+                                    "matched_track_id": matched_person.get("track_id", ""),
+                                    "person_conf": matched_person.get("confidence", ""),
+                                    "tracking_mode": tracking_mode,
+                                })
+                                matched_person = None
+                            if matched_person is None:
+                                tracking_debug_rows.append({
+                                    "ts": frame_data["timestamp"],
+                                    "camera": cam_id,
+                                    "marker_id": marker_id,
+                                    "employee": worker_state.get("name", ""),
+                                    "event": "yellow_not_continued",
+                                    "reason": "no current person body matched to locked employee",
+                                    "marker_age_sec": round(marker_age, 2),
+                                    "persons": len(person_boxes),
+                                    "last_track_id": worker_state.get("track_id", ""),
+                                    "matched_track_id": "",
+                                    "person_conf": worker_state.get("person_conf", ""),
+                                    "tracking_mode": "lost",
+                                })
+                                continue
 
+                            matched_person["employee_marker_id"] = marker_id
+                            matched_person["global_id"] = f"emp_{marker_id}"
                             if matched_person.get("track_id") is not None:
                                 person_tracker.bind_employee(cam_id, matched_person["track_id"], marker_id)
-                                matched_person["employee_marker_id"] = marker_id
-                                matched_person["global_id"] = f"emp_{marker_id}"
+                            try:
+                                used_person_box_ids.add(person_boxes.index(matched_person))
+                            except ValueError:
+                                pass
 
                             floor_pos = person_floor_point(matched_person)
                             calibration = distance_calibrations.get(cam_id, {})
@@ -2562,6 +3022,8 @@ def main():
 
                         for idx, person in enumerate(person_boxes):
                             if idx in used_person_box_ids:
+                                continue
+                            if float(person.get("confidence", 0.0)) < display_confidence:
                                 continue
                             if likely_recent_tracked_person(
                                 person,
@@ -2630,7 +3092,11 @@ def main():
 
                 employee_records = []
                 for mid, state in history.items():
-                    account_worker_time(state, now_ts, runtime["marker_stale_after_seconds"])
+                    account_worker_time(
+                        state,
+                        now_ts,
+                        min(runtime["marker_hidden_max_seconds"], runtime["marker_hidden_grace_seconds"]),
+                    )
                     current_cam = state.get("cam_id", "unknown")
                     visible_this_loop = state.get("last_visual_frame") == loop_counter
                     state["visible_now"] = visible_this_loop
@@ -2672,14 +3138,14 @@ def main():
                     frame_data["stats"].append(employee_record)
 
                 frame_data["total_person_count"] = total_detected_people
-                with open(runtime["employee_records_file"], "w") as f:
-                    json.dump({
-                        "timestamp": frame_data["timestamp"],
-                        "employees": employee_records,
-                    }, f, indent=2)
-                
-                # Throttle live_stats.json writes to reduce I/O contention
+
+                # Throttle all JSON writes to reduce I/O contention
                 if now_ts - last_stats_write_ts >= stats_write_interval:
+                    # employee_records — moved here from per-frame write (was blocking 15x/sec)
+                    _emp_payload = json.dumps({"timestamp": frame_data["timestamp"], "employees": employee_records})
+                    image_writer_pool.submit(write_text_file, runtime["employee_records_file"], _emp_payload)
+                    append_tracking_debug(tracking_debug_path, tracking_debug_rows)
+                    tracking_debug_rows.clear()
                     for live_stats_path in {runtime["live_stats_file"], runtime["dashboard_live_stats_file"]}:
                         with open(live_stats_path, "w") as f:
                             json.dump(frame_data, f, indent=2)

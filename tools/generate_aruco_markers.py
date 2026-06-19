@@ -19,14 +19,24 @@ def generate_markers(csv_path="data/employees.csv", output_dir="data/aruco_marke
     print(f"Generating {len(df)} markers...")
     
     for index, row in df.iterrows():
-        marker_id = int(row['marker_id'])
+        display_marker_id = int(row["marker_id"])
+        opencv_marker_id = int(row.get("opencv_marker_id", display_marker_id))
         employee_name = row['name'].replace(" ", "_")
         
         # Generate marker image
-        marker_img = cv2.aruco.generateImageMarker(aruco_dict, marker_id, 200)
+        marker_img = cv2.aruco.generateImageMarker(aruco_dict, opencv_marker_id, 200)
+        marker_img = cv2.copyMakeBorder(
+            marker_img,
+            40,
+            40,
+            40,
+            40,
+            cv2.BORDER_CONSTANT,
+            value=255,
+        )
         
         # Save marker
-        file_name = f"marker_{marker_id}_{employee_name}.png"
+        file_name = f"marker_{display_marker_id:02d}_{employee_name}.png"
         file_path = os.path.join(output_dir, file_name)
         cv2.imwrite(file_path, marker_img)
         

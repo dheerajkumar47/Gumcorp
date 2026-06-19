@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from pathlib import Path
 
 import fitz
@@ -111,10 +111,28 @@ class PdfWriter:
 def summary_rows(employees: list[dict]) -> list[tuple[str, str]]:
     rows = []
     for employee in employees:
+        camera_items = meaningful_time_items(employee.get("camera_times_sec") or {})
+        primary_camera = camera_report_label(camera_items[0][0]) if camera_items else "-"
+        active_time = seconds_text(visible_seconds(employee))
+        working_time = sum(
+            seconds
+            for status, seconds in meaningful_time_items(employee.get("status_times_sec") or {})
+            if "WORK" in status.upper()
+        )
+        idle_time = sum(
+            seconds
+            for status, seconds in meaningful_time_items(employee.get("status_times_sec") or {})
+            if "IDLE" in status.upper() or "REST" in status.upper()
+        )
+        status_bits = [f"active {active_time}"]
+        if working_time >= MIN_DISPLAY_SECONDS:
+            status_bits.append(f"work {seconds_text(working_time)}")
+        if idle_time >= MIN_DISPLAY_SECONDS:
+            status_bits.append(f"idle {seconds_text(idle_time)}")
         rows.append(
             (
                 f"{employee.get('id', '-')}: {employee.get('name', '-')}",
-                f"{employee.get('status', '-')} | {employee.get('current_camera', '-')} | {float(employee.get('total_distance_ft') or 0):.1f} ft",
+                f"{' | '.join(status_bits)} | {primary_camera} | {float(employee.get('total_distance_ft') or 0):.1f} ft",
             )
         )
     return rows
@@ -163,13 +181,48 @@ def visible_seconds(employee: dict) -> float:
     return max(camera_total, status_total)
 
 
-def not_visible_seconds(employee: dict) -> float:
+def scheduled_break_windows(start_ts: float, end_ts: float) -> list[tuple[str, float, float]]:
+    if end_ts <= start_ts:
+        return []
+    start_dt = datetime.fromtimestamp(start_ts)
+    end_dt = datetime.fromtimestamp(end_ts)
+    windows = []
+    day = start_dt.date()
+    while day <= end_dt.date():
+        base = datetime.combine(day, time.min)
+        is_friday = base.weekday() == 4
+        candidates = [
+            ("Tea Break", base + timedelta(hours=9), base + timedelta(hours=9, minutes=15)),
+            ("Lunch Break", base + timedelta(hours=13), base + timedelta(hours=14 if is_friday else 13, minutes=0 if is_friday else 30)),
+            ("Tea Break", base + timedelta(hours=15), base + timedelta(hours=15, minutes=15)),
+        ]
+        for label, begin, finish in candidates:
+            overlap_start = max(start_ts, begin.timestamp())
+            overlap_end = min(end_ts, finish.timestamp())
+            if overlap_end > overlap_start:
+                windows.append((label, overlap_start, overlap_end))
+        day += timedelta(days=1)
+    return windows
+
+
+def scheduled_break_seconds(employee: dict) -> dict[str, float]:
+    first_seen = employee.get("first_seen_ts")
+    last_seen = employee.get("last_seen_ts")
+    if first_seen is None or last_seen is None:
+        return {}
+    totals: dict[str, float] = {}
+    for label, begin, end in scheduled_break_windows(float(first_seen), float(last_seen)):
+        totals[label] = totals.get(label, 0.0) + max(0.0, end - begin)
+    return totals
+
+
+def untracked_seconds(employee: dict) -> float:
     first_seen = employee.get("first_seen_ts")
     last_seen = employee.get("last_seen_ts")
     if first_seen is None or last_seen is None:
         return 0.0
     elapsed = max(0.0, float(last_seen) - float(first_seen))
-    return max(0.0, elapsed - visible_seconds(employee))
+    return max(0.0, elapsed - visible_seconds(employee) - sum(scheduled_break_seconds(employee).values()))
 
 
 def client_breakdown_rows(employee: dict) -> list[tuple[str, str]]:
@@ -184,7 +237,8 @@ def client_breakdown_rows(employee: dict) -> list[tuple[str, str]]:
     walking = sum(seconds for status, seconds in status_items.items() if "WALK" in status.upper())
     working = sum(seconds for status, seconds in status_items.items() if "WORK" in status.upper())
     idle = sum(seconds for status, seconds in status_items.items() if "IDLE" in status.upper() or "REST" in status.upper())
-    unknown = not_visible_seconds(employee)
+    unknown = untracked_seconds(employee)
+    breaks = scheduled_break_seconds(employee)
 
     if working >= MIN_DISPLAY_SECONDS:
         rows.append(("Work / active time", f"{seconds_text(working)} (hands/body/machine work or active task time)"))
@@ -192,8 +246,10 @@ def client_breakdown_rows(employee: dict) -> list[tuple[str, str]]:
         rows.append(("Transition / walking", f"{seconds_text(walking)} (moving between stations or zones)"))
     if idle >= MIN_DISPLAY_SECONDS:
         rows.append(("Rest / idle", f"{seconds_text(idle)} (visible but low movement)"))
+    for label, seconds in meaningful_time_items(breaks):
+        rows.append((label, f"{seconds_text(seconds)} (scheduled break time, not counted as tracking failure)"))
     if unknown >= MIN_DISPLAY_SECONDS:
-        rows.append(("Unknown / not visible", f"{seconds_text(unknown)} (employee not visible in tracked camera view)"))
+        rows.append(("Untracked / not credited", f"{seconds_text(unknown)} (not confirmed by employee tracking during this period)"))
 
     if not rows:
         rows.append(("No confirmed employee activity", "No ArUco-identified employee time was available"))
@@ -228,7 +284,8 @@ def build_pdf(records_payload: dict, live_payload: dict, output_path: Path) -> N
                 ("Status", employee.get("status", "-")),
                 ("Total distance", f"{float(employee.get('total_distance_ft') or 0):.2f} ft"),
                 ("Visible tracked time", seconds_text(visible_seconds(employee))),
-                ("Unknown / not visible", seconds_text(not_visible_seconds(employee))),
+                ("Scheduled break time", seconds_text(sum(scheduled_break_seconds(employee).values()))),
+                ("Untracked / not credited", seconds_text(untracked_seconds(employee))),
                 ("Last seen", seconds_text(employee.get("last_seen_age"))),
                 ("Person confidence", f"{float(employee.get('person_conf') or 0):.3f}"),
             ],

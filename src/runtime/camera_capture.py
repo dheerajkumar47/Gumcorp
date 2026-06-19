@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 
-_OPEN_CAPTURE_SEMAPHORE = threading.Semaphore(1)
+_OPEN_CAPTURE_SEMAPHORE = threading.Semaphore(3)
 
 
 class ThreadedCamera:
@@ -129,7 +129,7 @@ class ThreadedCamera:
         self._err_count = 0
         self._reconnects += 1
         self._opened_ts = time.time()
-        time.sleep(0.35)
+        time.sleep(0.08)
 
     def _reader(self) -> None:
         while self._running:
