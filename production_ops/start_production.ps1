@@ -5,9 +5,9 @@ param(
     [string]$Device = "cuda",
     [string]$CameraProfile = "main_stream",
     [ValidateSet("balanced", "speed", "quality")]
-    [string]$PerformanceProfile = "quality",
+    [string]$PerformanceProfile = "balanced",
     [int]$InferenceWidth = 1280,
-    [double]$ArucoZoom = 8.0,
+    [double]$ArucoZoom = 4.0,
     [double]$TargetFps = 12,
     [int]$BatchSize = 8,
     [int]$RecordingRetentionDays = 7,
@@ -29,13 +29,14 @@ function Get-ProductionShift {
     $now = Get-Date
     $minutes = ($now.Hour * 60) + $now.Minute
     $shiftAStart = (8 * 60)
-    $shiftAEnd = (19 * 60) + 30
+    $shiftAEnd = (20 * 60)
     $shiftBStart = (21 * 60)
+    $shiftBEnd = (5 * 60)
 
-    if ($minutes -ge $shiftAStart -and $minutes -le $shiftAEnd) {
+    if ($minutes -ge $shiftAStart -and $minutes -lt $shiftAEnd) {
         return "shift_A"
     }
-    if ($minutes -ge $shiftBStart -or $minutes -lt (6 * 60)) {
+    if ($minutes -ge $shiftBStart -or $minutes -lt $shiftBEnd) {
         return "shift_B"
     }
     return "shift_A"
@@ -72,29 +73,23 @@ Write-Host "Storage:    $StorageRoot"
 Write-Host "Recordings: $recordingDir"
 Write-Host "Reports:    $reportDir"
 Write-Host "Logs:       $logDir"
-Write-Host "Dashboard:  http://localhost:8000  (LAN: http://$((Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.InterfaceAlias -notlike '*Loopback*'} | Select-Object -First 1).IPAddress):8000)"
+$LanIp = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notlike '*Loopback*' } | Select-Object -First 1).IPAddress
+Write-Host "Dashboard:  http://localhost:8000  (LAN: http://${LanIp}:8000)"
 
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\production_ops\cleanup_retention.ps1" -RecordingDays $RecordingRetentionDays -LogDays $LogRetentionDays
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\production_ops\cleanup_retention.ps1" -StorageRoot $StorageRoot -RecordingDays $RecordingRetentionDays -LogDays $LogRetentionDays
 
-# Start python and capture PID for clean stop
-$PidFile = Join-Path $RepoRoot "logs\factory_ai.pid"
-New-Item -ItemType Directory -Path (Split-Path $PidFile) -Force | Out-Null
+# Run python — same as original (inline, Ctrl+C works normally)
+& ".\venv\Scripts\python.exe" "main.py" `
+    --camera-profile $CameraProfile `
+    --performance-profile $PerformanceProfile `
+    --inference-width $InferenceWidth `
+    --aruco-zoom $ArucoZoom `
+    --target-fps $TargetFps `
+    --batch-size $BatchSize `
+    --device $Device
 
-$proc = Start-Process ".\venv\Scripts\python.exe" `
-    -ArgumentList "main.py",
-        "--camera-profile", $CameraProfile,
-        "--performance-profile", $PerformanceProfile,
-        "--inference-width", $InferenceWidth,
-        "--aruco-zoom", $ArucoZoom,
-        "--target-fps", $TargetFps,
-        "--batch-size", $BatchSize,
-        "--device", $Device `
-    -WorkingDirectory $RepoRoot `
-    -PassThru `
-    -NoNewWindow
-
-$proc.Id | Out-File $PidFile -Encoding ascii
-Write-Host "Started PID $($proc.Id) — saved to $PidFile"
-Write-Host "To stop: .\production_ops\stop_production.ps1"
-
-$proc.WaitForExit()
+$pythonExitCode = $LASTEXITCODE
+if ($pythonExitCode -ne 0) {
+    Write-Host "Factory AI exited with code $pythonExitCode"
+    exit $pythonExitCode
+}

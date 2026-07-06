@@ -11,7 +11,7 @@ runtime:
   botsort_tracker_yaml: botsort.yaml
   inference_width: 1280
   aruco_max_width: 1920
-  aruco_every_n_frames: 2
+  aruco_every_n_frames: 6
   aruco_workers: 4
   aruco_crop_first_enabled: true
   aruco_crop_zoom: 4.0
@@ -42,10 +42,10 @@ runtime:
   tracker_confidence_threshold: 0.14
   display_confidence_threshold: 0.22
   track_binding_ttl_seconds: 120
-  identity_continuation_max_seconds: 25
+  identity_continuation_max_seconds: 90
   identity_continuation_min_confidence: 0.28
-  single_person_continuation_max_seconds: 120
-  assigned_min_marker_area: 18
+  single_person_continuation_max_seconds: 180
+  assigned_min_marker_area: 10
   unassigned_min_marker_area: 80
   ignored_opencv_marker_ids:
   - 17
@@ -130,7 +130,7 @@ cameras:
   stream_profiles:
     main_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30282/unicast/c1/s1/live
     sub_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30282/unicast/c1/s1/live
-  enabled: false
+  enabled: true
   position:
   - 900
   - 100
@@ -142,7 +142,7 @@ cameras:
   stream_profiles:
     main_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30312/unicast/c1/s1/live
     sub_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30312/unicast/c1/s1/live
-  enabled: true
+  enabled: false
   position:
   - 100
   - 500
@@ -154,7 +154,7 @@ cameras:
   stream_profiles:
     main_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30322/unicast/c1/s1/live
     sub_stream: rtsp://admin:Lion%2334Run@172.16.7.10:30322/unicast/c1/s1/live
-  enabled: true
+  enabled: false
   position:
   - 500
   - 500

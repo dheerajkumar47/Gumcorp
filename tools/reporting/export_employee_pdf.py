@@ -195,6 +195,8 @@ def scheduled_break_windows(start_ts: float, end_ts: float) -> list[tuple[str, f
             ("Tea Break", base + timedelta(hours=9), base + timedelta(hours=9, minutes=15)),
             ("Lunch Break", base + timedelta(hours=13), base + timedelta(hours=14 if is_friday else 13, minutes=0 if is_friday else 30)),
             ("Tea Break", base + timedelta(hours=15), base + timedelta(hours=15, minutes=15)),
+            ("Dinner Break", base + timedelta(hours=21), base + timedelta(hours=21, minutes=30)),
+            ("Night Tea Break", base + timedelta(hours=23), base + timedelta(hours=23, minutes=15)),
         ]
         for label, begin, finish in candidates:
             overlap_start = max(start_ts, begin.timestamp())

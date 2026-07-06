@@ -1,14 +1,17 @@
 param(
+    [string]$StorageRoot = "D:\Factory_AI",
     [int]$RecordingDays = 7,
     [int]$LogDays = 7
 )
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
-$productionRoot = Join-Path $RepoRoot "outputs\production"
-$recordingsRoot = Join-Path $productionRoot "recordings"
-$logsRoot = Join-Path $productionRoot "logs"
-$reportsRoot = Join-Path $productionRoot "reports"
+if (-not (Test-Path -LiteralPath $StorageRoot)) {
+    $StorageRoot = Join-Path $RepoRoot "outputs\production"
+}
+$recordingsRoot = Join-Path $StorageRoot "recordings"
+$logsRoot = Join-Path $StorageRoot "logs"
+$reportsRoot = Join-Path $StorageRoot "reports"
 
 function Remove-OldDateFolders {
     param(

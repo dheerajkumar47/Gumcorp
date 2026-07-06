@@ -4,39 +4,55 @@ param(
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
-$PidFile  = Join-Path $RepoRoot "logs\factory_ai.pid"
+$PidFile = Join-Path $RepoRoot "logs\factory_ai.pid"
 
-Write-Host "Factory AI — stopping production system..."
+Write-Host "Factory AI - stopping production system..."
 
-# 1. Try PID file first (clean stop)
-if (Test-Path $PidFile) {
+if (Test-Path -LiteralPath $PidFile) {
     try {
-        $pid_val = [int](Get-Content $PidFile -Raw).Trim()
-        $proc = Get-Process -Id $pid_val -ErrorAction SilentlyContinue
+        $pidValue = [int](Get-Content -LiteralPath $PidFile -Raw).Trim()
+        $proc = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
         if ($proc) {
-            Write-Host "Stopping process PID $pid_val ($($proc.Name))..."
-            Stop-Process -Id $pid_val -Force:$Force
+            Write-Host "Stopping process PID $pidValue ($($proc.Name))..."
+            Stop-Process -Id $pidValue -Force:$Force -ErrorAction SilentlyContinue
             Start-Sleep -Seconds 3
             Write-Host "Process stopped."
         } else {
-            Write-Host "PID $pid_val not running (already stopped)."
+            Write-Host "PID $pidValue not running."
         }
     } catch {
-        Write-Host "PID file read error: $_"
+        Write-Host "PID file read/stop error: $_"
     }
-    Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
 }
 
-# 2. Fallback: kill any python.exe running main.py
-$procs = Get-WmiObject Win32_Process -Filter "Name='python.exe'" |
-         Where-Object { $_.CommandLine -like "*main.py*" }
+$pythonProcs = Get-Process -Name python -ErrorAction SilentlyContinue
+if (-not $pythonProcs) {
+    Write-Host "No python.exe process found."
+    exit 0
+}
 
-if ($procs) {
-    foreach ($p in $procs) {
-        Write-Host "Killing python main.py (PID $($p.ProcessId))..."
-        Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+$stopped = 0
+foreach ($proc in $pythonProcs) {
+    try {
+        $cmd = ""
+        try {
+            $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.Id)" -ErrorAction Stop).CommandLine
+        } catch {
+            $cmd = ""
+        }
+        if ($cmd -like "*main.py*" -or $cmd -eq "") {
+            Write-Host "Stopping python PID $($proc.Id)..."
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            $stopped += 1
+        }
+    } catch {
+        Write-Host "Could not stop PID $($proc.Id): $_"
     }
-    Write-Host "Done."
+}
+
+if ($stopped -eq 0) {
+    Write-Host "No running Factory AI main.py process found."
 } else {
-    Write-Host "No running Factory AI process found."
+    Write-Host "Stopped $stopped python process(es)."
 }

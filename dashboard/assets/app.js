@@ -118,6 +118,19 @@ const DashboardApp = (() => {
         return Math.max(cameraTotal, statusTotal);
     }
 
+    function ensureBreakBanner() {
+        const topbar = document.querySelector(".topbar");
+        if (!topbar) return null;
+        let banner = document.getElementById("break-banner");
+        if (!banner) {
+            banner = document.createElement("div");
+            banner.id = "break-banner";
+            banner.className = "break-banner";
+            topbar.appendChild(banner);
+        }
+        return banner;
+    }
+
     async function loadData() {
         try {
             const response = await fetch("/logs/live_stats.json?" + Date.now());
@@ -359,6 +372,20 @@ const DashboardApp = (() => {
         setText("health-people", String(state.data.total_person_count || 0));
         setText("health-runtime", state.data.runtime?.device || "unknown");
         setText("health-updated", (state.data.timestamp || "").split(" ")[1] || "--:--:--");
+
+        const breakBanner = ensureBreakBanner();
+        if (breakBanner) {
+            if (state.data.lunch_mode && state.data.break_message) {
+                breakBanner.style.display = "flex";
+                breakBanner.innerHTML = `
+                    <strong>${escapeHtml(state.data.break_message)}</strong>
+                    <span>${state.data.total_person_count || 0} live people detected. Shift records below are historical.</span>
+                `;
+            } else {
+                breakBanner.style.display = "none";
+                breakBanner.innerHTML = "";
+            }
+        }
     }
 
     function renderOverview() {
@@ -398,7 +425,9 @@ const DashboardApp = (() => {
 
         setHtml(
             "overview-active-employees",
-            employees.length
+            state.data.lunch_mode && !(state.data.total_person_count || 0)
+                ? `<div class="list-empty">Scheduled break is active. No live employees are currently detected; previous employee cards remain in the shift history.</div>`
+                : employees.length
                 ? employees.slice(0, 6).map((worker) => `
                     <div class="employee-card" data-employee-id="${escapeHtml(worker.id)}">
                         <div class="employee-meta">

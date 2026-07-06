@@ -185,6 +185,27 @@ button {
     font-size: 12px;
 }
 
+.break-banner {
+    align-items: center;
+    gap: 10px;
+    max-width: 430px;
+    padding: 9px 12px;
+    border: 1px solid rgba(200, 131, 31, 0.45);
+    border-radius: 8px;
+    background: rgba(255, 244, 220, 0.95);
+    color: #6f4306;
+    font-size: 12px;
+}
+
+.break-banner strong {
+    color: #7b4700;
+    white-space: nowrap;
+}
+
+.break-banner span {
+    color: #7b5b25;
+}
+
 .status-line {
     display: inline-flex;
     align-items: center;

@@ -106,16 +106,46 @@ def ensure_camera_registry(config, registry_path):
 def load_camera_registry(config, registry_path):
     registry_path = Path(registry_path)
     ensure_camera_registry(config, registry_path)
-    payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(registry_path.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as exc:
+        print(f"Camera registry reload skipped: {exc}")
+        fallback = {"version": 1, "updated_at": "", "cameras": config.get("cameras", [])}
+        payload = fallback
     cameras = [normalize_camera_entry(cam) for cam in payload.get("cameras", [])]
     return payload, cameras
 
 
 def write_camera_registry(registry_path, cameras):
+    # Preserve calibration_points from the existing registry — the dashboard
+    # does not include them in its PUT payload, so they would be silently wiped
+    # on every camera toggle without this merge.
+    existing_calibration = {}
+    try:
+        existing_text = Path(registry_path).read_text(encoding="utf-8-sig")
+        existing_payload = json.loads(existing_text)
+        for cam in existing_payload.get("cameras", []):
+            cam_id = str(cam.get("id", "")).strip()
+            cal = cam.get("calibration_points")
+            if cam_id and cal and (cal.get("camera_points") or cal.get("map_points")):
+                existing_calibration[cam_id] = cal
+    except Exception:
+        pass
+
+    normalized = []
+    for cam in cameras:
+        entry = normalize_camera_entry(cam)
+        cam_id = entry["id"]
+        cal = entry.get("calibration_points", {})
+        # Only restore from existing if the incoming entry has no points
+        if cam_id in existing_calibration and not cal.get("camera_points") and not cal.get("map_points"):
+            entry["calibration_points"] = existing_calibration[cam_id]
+        normalized.append(entry)
+
     payload = {
         "version": 1,
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "cameras": [normalize_camera_entry(cam) for cam in cameras],
+        "cameras": normalized,
     }
     Path(registry_path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return payload
@@ -169,6 +199,8 @@ def get_runtime_config(config, args):
         "live_stats_file": os.path.join(log_dir, "live_stats.json"),
         "dashboard_live_stats_file": "logs/live_stats.json",
         "decoder_log_file": os.path.join(log_dir, "decoder_ffmpeg.log"),
+        "production_watchdog_timeout_seconds": float(runtime.get("production_watchdog_timeout_seconds", 120.0)),
+        "production_watchdog_check_seconds": float(runtime.get("production_watchdog_check_seconds", 10.0)),
         "monitor_interval_seconds": runtime.get("monitor_interval_seconds", 2.0),
         "jpeg_quality_live": runtime.get("jpeg_quality_live", 75),
         "reconnect_after": runtime.get("reconnect_after", 10),
@@ -278,12 +310,12 @@ def apply_performance_profile(runtime):
         runtime["batch_size"] = max(runtime["batch_size"], 6)
         runtime["aruco_max_width"] = min(runtime["aruco_max_width"], 1280)
         runtime["aruco_every_n_frames"] = max(2, int(runtime["aruco_every_n_frames"]))
-        runtime["aruco_workers"] = max(2, min(runtime["aruco_workers"], 2))
+        runtime["aruco_workers"] = max(2, runtime["aruco_workers"])  # allow config value, min 2
         runtime["dashboard_image_width"] = min(runtime["dashboard_image_width"], 1280)
         runtime["dashboard_fps"] = min(runtime["dashboard_fps"], 4.0)
         runtime["jpeg_quality_live"] = max(75, min(runtime["jpeg_quality_live"], 82))
-        runtime["stale_camera_after_seconds"] = max(runtime["stale_camera_after_seconds"], 45.0)
-        runtime["reconnect_interval_seconds"] = max(runtime["reconnect_interval_seconds"], 15.0)
+        runtime["stale_camera_after_seconds"] = max(runtime["stale_camera_after_seconds"], 30.0)
+        runtime["reconnect_interval_seconds"] = max(runtime["reconnect_interval_seconds"], 3.0)
     elif profile == "speed":
         runtime["inference_width"] = min(runtime["inference_width"], 1536)
         runtime["target_fps"] = min(runtime["target_fps"], 12.0)
@@ -291,7 +323,7 @@ def apply_performance_profile(runtime):
         runtime["aruco_max_width"] = min(runtime["aruco_max_width"], 1280)
         runtime["aruco_crop_zoom"] = max(runtime["aruco_crop_zoom"], 6.0)
         runtime["aruco_every_n_frames"] = max(1, min(2, int(runtime["aruco_every_n_frames"])))
-        runtime["aruco_workers"] = max(2, min(runtime["aruco_workers"], 2))
+        runtime["aruco_workers"] = max(2, runtime["aruco_workers"])  # allow config value, min 2
         runtime["aruco_full_frame_fallback"] = False
         runtime["dashboard_image_width"] = min(runtime["dashboard_image_width"], 960)
         runtime["dashboard_fps"] = min(runtime["dashboard_fps"], 8)
@@ -299,10 +331,11 @@ def apply_performance_profile(runtime):
         runtime["stale_camera_after_seconds"] = max(runtime["stale_camera_after_seconds"], 30.0)
         runtime["reconnect_interval_seconds"] = max(runtime["reconnect_interval_seconds"], 3.0)
     elif profile == "quality":
-        runtime["inference_width"] = max(runtime["inference_width"], min(1920, int(runtime["inference_width"] * 1.25)))
+        # Do NOT bump inference_width — larger images cost GPU without helping ArUco accuracy
+        # (ArUco runs on cropped regions, not the full YOLO inference frame)
         runtime["aruco_max_width"] = max(runtime["aruco_max_width"], 2560)
-        runtime["aruco_crop_zoom"] = max(runtime["aruco_crop_zoom"], 6.0)
-        runtime["aruco_every_n_frames"] = max(1, int(runtime["aruco_every_n_frames"] / 2))
+        # Do NOT force a minimum zoom — let caller set zoom via --aruco-zoom
+        runtime["aruco_every_n_frames"] = max(2, int(runtime["aruco_every_n_frames"] / 2))
         runtime["aruco_workers"] = max(runtime["aruco_workers"], 4)
         runtime["batch_size"] = max(runtime["batch_size"], 4)
     return runtime
@@ -394,21 +427,36 @@ def aruco_detector_params():
     return params
 
 def detect_markers_with_variants(detector, gray):
-    # Variants tuned for overhead cameras + bright/dusty factory environment.
-    # Each entry is (image, scale_x, scale_y) — scale factors map detected corners
-    # BACK to the original gray coordinate space before returning.
-    # Stretched variants compensate for overhead/angled cameras that foreshorten markers.
+    # Performance-critical: try variants in order, EXIT EARLY once marker found.
+    # Benchmark: raw=160ms, each extra variant=160ms, stretch=200ms on 1200x2400 crop.
+    # Early exit means common clean markers cost ~160ms instead of 1250ms (7.8x faster).
+    #
+    # Variants in priority order (fastest/most-likely first):
+    # 1. raw        — clean markers, good lighting (exits here ~80% of time)
+    # 2. hist-eq    — white dusty background (exits here most remaining cases)
+    # 3. CLAHE      — shadows, uneven light
+    # 4. sharpen    — blurry/soft markers
+    # 5-7. stretch  — overhead camera foreshortening (only if 1-4 all failed)
+    #                 stretch images are capped to 640px to avoid huge CPU cost
     h, w = gray.shape[:2]
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     sharp = cv2.filter2D(gray, -1, np.array([[0,-1,0],[-1,5,-1],[0,-1,0]], dtype=np.float32))
+
+    # Downscale source for stretch variants (cap at 640px max dim)
+    MAX_STRETCH_DIM = 640
+    sf  = min(1.0, MAX_STRETCH_DIM / max(h, w, 1))
+    sg  = cv2.resize(gray,  (max(1, int(w*sf)), max(1, int(h*sf))), interpolation=cv2.INTER_LINEAR) if sf < 1.0 else gray
+    ss  = cv2.resize(sharp, (max(1, int(w*sf)), max(1, int(h*sf))), interpolation=cv2.INTER_LINEAR) if sf < 1.0 else sharp
+    sh_s, sw_s = sg.shape[:2]
+
     variants = [
-        (gray,                                                              1.0,      1.0),
-        (cv2.equalizeHist(gray),                                            1.0,      1.0),
-        (clahe.apply(gray),                                                 1.0,      1.0),
-        (sharp,                                                             1.0,      1.0),
-        (cv2.resize(gray,  (w, int(h * 2.0)), interpolation=cv2.INTER_LINEAR), 1.0,  1/2.0),
-        (cv2.resize(gray,  (int(w * 2.0), h), interpolation=cv2.INTER_LINEAR), 1/2.0, 1.0),
-        (cv2.resize(sharp, (w, int(h * 1.6)), interpolation=cv2.INTER_LINEAR), 1.0,  1/1.6),
+        (gray,                                                                       1.0,          1.0),
+        (cv2.equalizeHist(gray),                                                     1.0,          1.0),
+        (clahe.apply(gray),                                                          1.0,          1.0),
+        (sharp,                                                                      1.0,          1.0),
+        (cv2.resize(sg, (sw_s, max(1, sh_s*2)),   interpolation=cv2.INTER_LINEAR),  1.0/sf,       1.0/(2.0*sf)),
+        (cv2.resize(sg, (max(1,sw_s*2), sh_s),   interpolation=cv2.INTER_LINEAR),  1.0/(2.0*sf), 1.0/sf),
+        (cv2.resize(ss, (sw_s, max(1,int(sh_s*1.6))), interpolation=cv2.INTER_LINEAR), 1.0/sf,   1.0/(1.6*sf)),
     ]
 
     seen = set()
@@ -418,12 +466,13 @@ def detect_markers_with_variants(detector, gray):
         corners, ids, _ = detector.detectMarkers(variant_img)
         if ids is None:
             continue
+        new_found = False
         for marker_id, marker_corners in zip(ids.flatten(), corners):
             marker_id = int(marker_id)
             if marker_id in seen:
                 continue
             seen.add(marker_id)
-            # Scale corners back to original gray coordinate space
+            new_found = True
             if sx != 1.0 or sy != 1.0:
                 mc = marker_corners.copy().astype(np.float32)
                 mc[0, :, 0] *= sx
@@ -432,6 +481,11 @@ def detect_markers_with_variants(detector, gray):
             else:
                 merged_corners.append(marker_corners)
             merged_ids.append(marker_id)
+        # Early exit: if this variant found new markers, skip remaining variants.
+        # Only continue to next variant if this one found nothing new.
+        if new_found:
+            break
+
     if not merged_ids:
         return None, None
     return tuple(merged_corners), np.array([[marker_id] for marker_id in merged_ids], dtype=np.int32)
@@ -531,7 +585,28 @@ def detect_aruco_in_person_crops(
                 continue
             zoom = cv2.resize(crop, None, fx=zoom_scale, fy=zoom_scale, interpolation=cv2.INTER_CUBIC)
             gray = cv2.cvtColor(zoom, cv2.COLOR_BGR2GRAY)
-            crop_corners, crop_ids = detect_markers_with_variants(detector, gray)
+
+            # Cap gray to 640px max so ArUco variants don't run on huge zoomed images.
+            # At 4x zoom a 150x300px bbox → 600x1200px → cap → ~320x640px (5x fewer pixels).
+            # Corners are scaled back to zoom/gray space before the caller maps to full frame.
+            _MAX_DIM = 640
+            _zh, _zw = gray.shape[:2]
+            if max(_zh, _zw) > _MAX_DIM:
+                _as = _MAX_DIM / max(_zh, _zw)
+                gray_det = cv2.resize(gray, (max(1, int(_zw*_as)), max(1, int(_zh*_as))), interpolation=cv2.INTER_LINEAR)
+            else:
+                _as = 1.0
+                gray_det = gray
+
+            crop_corners, crop_ids = detect_markers_with_variants(detector, gray_det)
+
+            # Scale corners from capped space back to full zoom/gray space
+            if crop_ids is not None and _as < 1.0:
+                crop_corners = tuple(
+                    np.array([mc[0] / _as], dtype=np.float32)
+                    for mc in crop_corners
+                )
+
             if crop_ids is None:
                 crop_detections_log.append(f"Person {person_index}: no markers")
                 continue
@@ -1687,10 +1762,14 @@ def bound_track_detection_is_plausible(worker_state, person, marker_age, runtime
     if same_track and marker_age <= runtime["marker_hidden_max_seconds"]:
         if center_distance <= max(170.0, size_ref * 1.05) and floor_distance <= max(210.0, size_ref * 1.20):
             return True, "same bound track near previous body"
-    if area_ratio > 1.05 or aspect_ratio > 1.05:
-        return False, "bound track body shape changed too much"
+    # Appearance check BEFORE shape — overhead cameras change bbox size a lot when
+    # workers move closer/farther; appearance similarity is more reliable than size.
     if feature_score >= 0.72 and center_distance <= max(170.0, size_ref * 1.10):
         return True, "bound track appearance match"
+    # Shape guard: log ratio > 2.0 means ~7.4x size/aspect change — truly a different person.
+    # (old threshold 1.05 = 2.86x was too tight for overhead camera depth variation)
+    if area_ratio > 2.0 or aspect_ratio > 2.0:
+        return False, "bound track body shape changed too much"
     return False, "bound track jumped away from previous body"
 
 
@@ -1968,6 +2047,18 @@ def clear_startup_outputs(runtime):
             path.unlink()
         except OSError:
             pass
+
+    for path in Path(runtime["recording_dir"]).rglob("*.part.mp4"):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    for path in Path(runtime["recording_dir"]).rglob("*.mp4"):
+        try:
+            if path.stat().st_size <= 1024:
+                path.unlink()
+        except OSError:
+            pass
 class VideoRecorder:
     def __init__(self, fps, codec, min_frames=3):
         self.fps = fps
@@ -1975,18 +2066,41 @@ class VideoRecorder:
         self.min_frames = min_frames
         self._writers = {}
 
+    @staticmethod
+    def _temp_path(path):
+        final_path = Path(path)
+        return str(final_path.with_name(f"{final_path.stem}.part{final_path.suffix}"))
+
+    def _finish_writer(self, path, writer_info):
+        writer_info["writer"].release()
+        temp_path = Path(writer_info.get("temp_path") or path)
+        final_path = Path(path)
+        frames = int(writer_info.get("frames", 0))
+        try:
+            if frames >= self.min_frames and temp_path.exists() and temp_path.stat().st_size > 1024:
+                final_path.parent.mkdir(parents=True, exist_ok=True)
+                temp_path.replace(final_path)
+            else:
+                temp_path.unlink(missing_ok=True)
+                if final_path.exists() and final_path.stat().st_size <= 1024:
+                    final_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
     def write(self, path, frame):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         height, width = frame.shape[:2]
         writer_info = self._writers.get(path)
         if writer_info is None or writer_info["size"] != (width, height):
             if writer_info is not None:
-                writer_info["writer"].release()
+                self._finish_writer(path, writer_info)
             fourcc = cv2.VideoWriter_fourcc(*self.codec[:4])
-            writer = cv2.VideoWriter(path, fourcc, self.fps, (width, height))
+            temp_path = self._temp_path(path)
+            Path(temp_path).unlink(missing_ok=True)
+            writer = cv2.VideoWriter(temp_path, fourcc, self.fps, (width, height))
             if not writer.isOpened():
                 return False
-            self._writers[path] = {"writer": writer, "size": (width, height), "frames": 0}
+            self._writers[path] = {"writer": writer, "size": (width, height), "frames": 0, "temp_path": temp_path}
             writer_info = self._writers[path]
         writer_info["writer"].write(frame)
         writer_info["frames"] += 1
@@ -1994,12 +2108,7 @@ class VideoRecorder:
 
     def close(self):
         for path, writer_info in self._writers.items():
-            writer_info["writer"].release()
-            if writer_info.get("frames", 0) < self.min_frames:
-                try:
-                    Path(path).unlink()
-                except OSError:
-                    pass
+            self._finish_writer(path, writer_info)
         self._writers.clear()
 
 def export_employee_report_on_shutdown():
@@ -2024,6 +2133,35 @@ def redirect_decoder_stderr(log_file):
     os.dup2(log_handle.fileno(), 2)
     return log_handle
 
+def start_production_watchdog(runtime, heartbeat):
+    if os.environ.get("FACTORY_AI_PRODUCTION") != "1":
+        return None
+
+    timeout = max(30.0, float(runtime.get("production_watchdog_timeout_seconds", 120.0)))
+    interval = max(5.0, float(runtime.get("production_watchdog_check_seconds", 10.0)))
+    log_path = Path(runtime["log_dir"]) / "watchdog.log"
+
+    def _watch():
+        while True:
+            time.sleep(interval)
+            age = time.time() - heartbeat.get("last_stats_write_ts", time.time())
+            if age > timeout:
+                message = (
+                    f"{time.strftime('%Y-%m-%d %H:%M:%S')} "
+                    f"watchdog_exit live_stats_stale_seconds={age:.1f} timeout={timeout:.1f}\n"
+                )
+                try:
+                    log_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(log_path, "a", encoding="utf-8") as f:
+                        f.write(message)
+                    print(message.strip(), flush=True)
+                finally:
+                    os._exit(70)
+
+    thread = threading.Thread(target=_watch, name="production-watchdog", daemon=True)
+    thread.start()
+    return thread
+
 def get_break_info():
     now = datetime.now()
     day = now.weekday() # 0=Mon, 4=Fri
@@ -2041,8 +2179,16 @@ def get_break_info():
         elif minute < 30: # Other days: 1:00 - 1:30
             return "LUNCH BREAK IN PROGRESS"
             
-    # 3:00 - 3:20 Tea Break (Extended buffer for demo stability)
-    if hour == 15 and minute < 20:
+    # 3:00 - 3:15 Tea Break
+    if hour == 15 and minute < 15:
+        return "TEA BREAK IN PROGRESS"
+
+    # Night shift dinner: 9:00 PM - 9:30 PM
+    if hour == 21 and minute < 30:
+        return "DINNER BREAK IN PROGRESS"
+
+    # Night shift tea: 11:00 PM - 11:15 PM
+    if hour == 23 and minute < 15:
         return "TEA BREAK IN PROGRESS"
         
     return None
@@ -2080,7 +2226,7 @@ def start_server(registry_path, registry_lock, port=8000):
         def do_GET(self):
             if self.path.startswith("/api/cameras"):
                 with registry_lock:
-                    payload = json.loads(Path(registry_path).read_text(encoding="utf-8"))
+                    payload = json.loads(Path(registry_path).read_text(encoding="utf-8-sig"))
                 return self._send_json(payload)
             return super().do_GET()
 
@@ -2255,6 +2401,23 @@ def main():
         f"dashboard={runtime['dashboard_image_width']}px/{runtime['dashboard_fps']}fps, "
         f"tracker={tracker_backend}"
     )
+    # BoT-SORT VRAM warning: one YOLO model per camera, each ~500MB VRAM
+    if tracker_backend == "botsort" and acceleration["cuda_available"]:
+        enabled_cam_count = sum(1 for c in config.get("cameras", []) if c.get("enabled", True))
+        vram_mb = torch.cuda.get_device_properties(0).total_memory // (1024 * 1024)
+        estimated_vram_needed = enabled_cam_count * 500
+        print(
+            f"[GPU] GPU: {acceleration['cuda_device_name']}, VRAM: {vram_mb}MB. "
+            f"BoT-SORT needs ~{estimated_vram_needed}MB for {enabled_cam_count} cameras "
+            f"({enabled_cam_count} models x ~500MB)."
+        )
+        if estimated_vram_needed > vram_mb * 0.85:
+            print(
+                f"[GPU WARNING] Estimated VRAM needed ({estimated_vram_needed}MB) exceeds "
+                f"85% of GPU VRAM ({vram_mb}MB). "
+                f"GPU utilization will be LOW. Disable {enabled_cam_count - int(vram_mb * 0.85 / 500)} cameras "
+                f"or switch to tracker_backend: bytetrack in settings.yaml."
+            )
     if runtime["redirect_decoder_logs"]:
         print(f"Decoder warnings redirected to {runtime['decoder_log_file']}")
 
@@ -2324,6 +2487,8 @@ def main():
     last_camera_sync_ts = 0.0
     last_stats_write_ts = 0.0
     stats_write_interval = 0.5  # Write live_stats.json only every 0.5 seconds (2x/sec instead of 8x/sec)
+    watchdog_heartbeat = {"last_stats_write_ts": time.time()}
+    start_production_watchdog(runtime, watchdog_heartbeat)
 
     try:
         while True:
@@ -2855,6 +3020,21 @@ def main():
                             )
                             tracking_mode = "byte_track_reid"
                             if matched_person is not None:
+                                # Proximity guard: if another unowned person overlaps this
+                                # detection by >30% IoU, the track may have swapped during
+                                # close proximity. Require a fresh ArUco to re-confirm.
+                                if marker_age > 4.0:
+                                    m_bbox = matched_person.get("bbox")
+                                    for other in person_boxes:
+                                        if other is matched_person:
+                                            continue
+                                        if other.get("employee_marker_id") is not None:
+                                            continue  # already owned by someone
+                                        if m_bbox and bbox_iou(m_bbox, other.get("bbox", (0,0,0,0))) > 0.30:
+                                            matched_person = None
+                                            reason = "proximity swap guard — overlapping unknown worker"
+                                            break
+                            if matched_person is not None:
                                 plausible, reason = bound_track_detection_is_plausible(
                                     worker_state,
                                     matched_person,
@@ -3150,6 +3330,7 @@ def main():
                         with open(live_stats_path, "w") as f:
                             json.dump(frame_data, f, indent=2)
                     last_stats_write_ts = now_ts
+                    watchdog_heartbeat["last_stats_write_ts"] = time.time()
 
                 elapsed = time.time() - loop_started
                 time.sleep(max(0.0, loop_interval - elapsed))
