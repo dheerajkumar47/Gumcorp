@@ -1,4 +1,6 @@
 const DashboardApp = (() => {
+    const LIVE_EMPLOYEE_GRACE_SECONDS = 45;
+
     const state = {
         data: {
             timestamp: "",
@@ -88,6 +90,17 @@ const DashboardApp = (() => {
         return state.data.stats || [];
     }
 
+    function isLiveEmployee(worker) {
+        if (!worker) return false;
+        if (worker.visible_now) return true;
+        const lastSeenAge = Number(worker.last_seen_age || 0);
+        return worker.status !== "NOT_VISIBLE" && lastSeenAge <= LIVE_EMPLOYEE_GRACE_SECONDS;
+    }
+
+    function getLiveEmployees() {
+        return getEmployees().filter(isLiveEmployee);
+    }
+
     function escapeHtml(value) {
         return String(value ?? "")
             .replace(/&/g, "&amp;")
@@ -172,7 +185,7 @@ const DashboardApp = (() => {
 
     function reconcileSelection() {
         const onlineCameras = getOnlineCameras();
-        const employees = getEmployees();
+        const employees = getLiveEmployees();
         if (!onlineCameras.some((camera) => camera.id === state.selectedCameraId)) {
             state.selectedCameraId = onlineCameras.length ? onlineCameras[0].id : null;
         }
@@ -337,7 +350,7 @@ const DashboardApp = (() => {
 
     function renderShell() {
         const onlineCameras = getOnlineCameras();
-        const employees = getEmployees();
+        const employees = getLiveEmployees();
         const runtimeLabel = document.getElementById("runtime-label");
         const clockLabel = document.getElementById("clock-label");
         const dot = document.getElementById("status-dot");
@@ -363,7 +376,7 @@ const DashboardApp = (() => {
             }
         }
 
-        if (navEmployees) navEmployees.textContent = `${employees.length} tracked`;
+        if (navEmployees) navEmployees.textContent = `${employees.length} live`;
         if (navCameras) navCameras.textContent = `${onlineCameras.length} online`;
         if (navPeople) navPeople.textContent = `${state.data.total_person_count || 0} detected`;
         if (navUptime) navUptime.textContent = fmtSec(state.data.uptime);
@@ -391,7 +404,7 @@ const DashboardApp = (() => {
     function renderOverview() {
         const cameras = state.data.cameras || [];
         const onlineCameras = getOnlineCameras();
-        const employees = getEmployees();
+        const employees = getLiveEmployees();
         const selectedCamera = cameras.find((camera) => camera.id === state.selectedCameraId) || null;
         const performance = state.data.performance || {};
 
@@ -505,7 +518,8 @@ const DashboardApp = (() => {
     }
 
     function renderEmployeesPage() {
-        const employees = getEmployees();
+        const allEmployees = getEmployees();
+        const employees = getLiveEmployees();
         const worker = employees.find((item) => String(item.id) === String(state.selectedEmployeeId)) || null;
         const listHtml = employees.length
             ? employees.map((item) => `
@@ -526,11 +540,13 @@ const DashboardApp = (() => {
                     </div>
                 </div>
             `).join("")
+            : allEmployees.length
+            ? `<div class="list-empty">No live employees right now. Shift history remains in the table below and final report.</div>`
             : `<div class="list-empty">No employee records yet.</div>`;
         setHtml("employees-list", listHtml);
 
-        const tableHtml = employees.length
-            ? employees.map((item) => `
+        const tableHtml = allEmployees.length
+            ? allEmployees.map((item) => `
                 <tr data-employee-id="${escapeHtml(item.id)}">
                     <td>${escapeHtml(item.name)}</td>
                     <td><span class="pill ${workerTone(item.status)}">${escapeHtml(item.status || "ACTIVE")}</span></td>

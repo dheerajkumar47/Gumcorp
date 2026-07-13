@@ -24,6 +24,7 @@ runtime:
   path_video_every_n_frames: 6
   path_video_fps: 2.5
   path_video_min_frames: 2
+  path_video_segment_seconds: 60
   path_video_codec: mp4v
   redirect_decoder_logs: true
   decoder_log_file: logs/decoder_ffmpeg.log

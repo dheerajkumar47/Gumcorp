@@ -191,6 +191,7 @@ def get_runtime_config(config, args):
         "path_video_every_n_frames": max(1, int(runtime.get("path_video_every_n_frames", 10))),
         "path_video_fps": max(0.5, float(runtime.get("path_video_fps", 5.0))),
         "path_video_min_frames": max(1, int(runtime.get("path_video_min_frames", 3))),
+        "path_video_segment_seconds": max(10.0, float(runtime.get("path_video_segment_seconds", 60.0))),
         "path_video_codec": str(runtime.get("path_video_codec", "mp4v")),
         "redirect_decoder_logs": bool(runtime.get("redirect_decoder_logs", True)),
         "log_dir": log_dir,
@@ -2048,6 +2049,8 @@ def clear_startup_outputs(runtime):
         except OSError:
             pass
 
+    Path("logs/factory_ai.stop").unlink(missing_ok=True)
+
     for path in Path(runtime["recording_dir"]).rglob("*.part.mp4"):
         try:
             path.unlink()
@@ -2060,21 +2063,25 @@ def clear_startup_outputs(runtime):
         except OSError:
             pass
 class VideoRecorder:
-    def __init__(self, fps, codec, min_frames=3):
+    def __init__(self, fps, codec, min_frames=3, segment_seconds=60.0):
         self.fps = fps
         self.codec = codec
         self.min_frames = min_frames
+        self.segment_seconds = segment_seconds
         self._writers = {}
 
     @staticmethod
-    def _temp_path(path):
-        final_path = Path(path)
-        return str(final_path.with_name(f"{final_path.stem}.part{final_path.suffix}"))
+    def _segment_paths(path):
+        base_path = Path(path)
+        stamp = time.strftime("%H%M%S")
+        final_path = base_path.with_name(f"{base_path.stem}_{stamp}{base_path.suffix}")
+        temp_path = final_path.with_name(f"{final_path.stem}.part{final_path.suffix}")
+        return str(final_path), str(temp_path)
 
     def _finish_writer(self, path, writer_info):
         writer_info["writer"].release()
         temp_path = Path(writer_info.get("temp_path") or path)
-        final_path = Path(path)
+        final_path = Path(writer_info.get("final_path") or path)
         frames = int(writer_info.get("frames", 0))
         try:
             if frames >= self.min_frames and temp_path.exists() and temp_path.stat().st_size > 1024:
@@ -2091,16 +2098,27 @@ class VideoRecorder:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         height, width = frame.shape[:2]
         writer_info = self._writers.get(path)
-        if writer_info is None or writer_info["size"] != (width, height):
+        segment_expired = (
+            writer_info is not None
+            and time.time() - float(writer_info.get("started_at", time.time())) >= self.segment_seconds
+        )
+        if writer_info is None or writer_info["size"] != (width, height) or segment_expired:
             if writer_info is not None:
                 self._finish_writer(path, writer_info)
             fourcc = cv2.VideoWriter_fourcc(*self.codec[:4])
-            temp_path = self._temp_path(path)
+            final_path, temp_path = self._segment_paths(path)
             Path(temp_path).unlink(missing_ok=True)
             writer = cv2.VideoWriter(temp_path, fourcc, self.fps, (width, height))
             if not writer.isOpened():
                 return False
-            self._writers[path] = {"writer": writer, "size": (width, height), "frames": 0, "temp_path": temp_path}
+            self._writers[path] = {
+                "writer": writer,
+                "size": (width, height),
+                "frames": 0,
+                "temp_path": temp_path,
+                "final_path": final_path,
+                "started_at": time.time(),
+            }
             writer_info = self._writers[path]
         writer_info["writer"].write(frame)
         writer_info["frames"] += 1
@@ -2124,6 +2142,16 @@ def export_employee_report_on_shutdown():
             print(f"Employee activity PDF saved to {output_path}")
     except Exception as exc:
         print(f"Employee activity PDF export skipped: {exc}")
+
+def merge_recordings_on_shutdown(runtime):
+    try:
+        from tools.reporting.merge_recordings import merge_recordings
+
+        results = merge_recordings(runtime["recording_dir"], runtime["path_video_codec"])
+        if results:
+            print(f"Merged {len(results)} employee/proof recording file(s).")
+    except Exception as exc:
+        print(f"Recording merge skipped: {exc}")
 
 def redirect_decoder_stderr(log_file):
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
@@ -2477,10 +2505,14 @@ def main():
 
     aruco_pool = concurrent.futures.ThreadPoolExecutor(max_workers=runtime["aruco_workers"])
     image_writer_pool = concurrent.futures.ThreadPoolExecutor(max_workers=runtime["image_writer_workers"])
+    pid_file = Path("logs/factory_ai.pid")
+    stop_file = Path("logs/factory_ai.stop")
+    pid_file.write_text(str(os.getpid()), encoding="utf-8")
     path_video_recorder = VideoRecorder(
         runtime["path_video_fps"],
         runtime["path_video_codec"],
         runtime["path_video_min_frames"],
+        runtime["path_video_segment_seconds"],
     )
     tracking_debug_path = os.path.join(runtime["log_dir"], "tracking_debug.csv")
     tracking_debug_rows = []
@@ -2492,6 +2524,9 @@ def main():
 
     try:
         while True:
+            if stop_file.exists():
+                print("Graceful stop requested; finalizing recordings and report...")
+                break
             loop_counter += 1
             loop_started = time.time()
             try:
@@ -3344,7 +3379,10 @@ def main():
         pass
     finally:
         path_video_recorder.close()
+        merge_recordings_on_shutdown(runtime)
         export_employee_report_on_shutdown()
+        pid_file.unlink(missing_ok=True)
+        stop_file.unlink(missing_ok=True)
         aruco_pool.shutdown(wait=False, cancel_futures=True)
         image_writer_pool.shutdown(wait=False, cancel_futures=True)
         for cam in active_cameras.values():

@@ -32,6 +32,7 @@ experiments/
 # Large local assets
 data/videos/
 models/*.pt
+models/*.onnx
 *.mp4
 *.pdf
 docs/
